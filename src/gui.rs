@@ -541,11 +541,9 @@ impl Integration {
         // Extract pixel data from egui
         let data: Vec<u8> = match &delta.image {
             egui::ImageData::Color(image) => {
-                assert_eq!(
-                    image.width() * image.height(),
-                    image.pixels.len(),
-                    "Mismatch between texture size and texel count"
-                );
+                if image.width() * image.height() != image.pixels.len() {
+                    return Err(anyhow!("Mismatch between texture size and texel count"));
+                }
                 image
                     .pixels
                     .iter()
