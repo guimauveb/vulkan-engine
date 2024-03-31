@@ -10,7 +10,7 @@ With the help of [egui-winit-ash-integration](https://github.com/MatchaChoco010/
 **The code needs a major refactoring** (that I am currently working on while learning more about graphics programming and Vulkan.)
 
 ## Disclaimer
-While the program seems to work perfectly well and without any validation error, because I'm completely new to Vulkan and graphics programming in general I probably did some mistakes that neither the validation layers nor I can detect.
+⚠️  While the program seems to work perfectly well and without any validation error, because I'm completely new to Vulkan and graphics programming in general I probably did some mistakes that neither the validation layers nor I can detect. ⚠️
 
 ## Example
 
