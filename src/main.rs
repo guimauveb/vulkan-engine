@@ -534,6 +534,77 @@ impl Engine {
         Ok(command_buffer)
     }
 
+    /// Update egui integration.
+    fn update_gui(
+        &mut self,
+        command_buffer: vk::CommandBuffer,
+        image_index: usize,
+        window: &mut Window,
+    ) -> Result<()> {
+        if let (Some(egui_integration), Some(theme)) = (
+            self.data.egui_integration.as_mut(),
+            self.data.theme.as_mut(),
+        ) {
+            match theme {
+                EguiTheme::Dark => egui_integration
+                    .context()
+                    .set_visuals(egui::style::Visuals::dark()),
+                EguiTheme::Light => egui_integration
+                    .context()
+                    .set_visuals(egui::style::Visuals::light()),
+            }
+
+            egui_integration.begin_frame(window);
+            egui::SidePanel::left("my_side_panel").show(&egui_integration.context(), |ui| {
+                ui.heading("vulkan-engine");
+                ui.label("v0.1.0");
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label("Theme");
+                    let id = ui.make_persistent_id("theme_combo_box_side");
+                    egui::ComboBox::from_id_source(id)
+                        .selected_text(format!("{theme:?}"))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(theme, EguiTheme::Dark, "Dark");
+                            ui.selectable_value(theme, EguiTheme::Light, "Light");
+                        });
+                });
+                ui.separator();
+            });
+            egui::Window::new("Window 1")
+                .resizable(true)
+                .scroll2([true, true])
+                .show(&egui_integration.context(), |ui| {
+                    ui.heading("vulkan-engine");
+                    ui.label("v0.1.0");
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        ui.label("Theme");
+                        let id = ui.make_persistent_id("theme_combo_box_window");
+                        egui::ComboBox::from_id_source(id)
+                            .selected_text(format!("{theme:?}"))
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(theme, EguiTheme::Dark, "Dark");
+                                ui.selectable_value(theme, EguiTheme::Light, "Light");
+                            });
+                    });
+                    ui.separator();
+                });
+            let output = egui_integration.end_frame(window);
+            // TODO - Get pixels_per_point value from somewhere
+            let clipped_meshes = egui_integration.context().tessellate(output.shapes, 1.25);
+            egui_integration.paint(
+                command_buffer,
+                image_index,
+                clipped_meshes,
+                output.textures_delta,
+            )?;
+        }
+
+        Ok(())
+    }
+
+    /// Update command buffer.
     unsafe fn update_command_buffer(
         &mut self,
         image_index: usize,
@@ -580,70 +651,13 @@ impl Engine {
             &info,
             vk::SubpassContents::SECONDARY_COMMAND_BUFFERS,
         );
-        let secondary_command_buffers = (0..1)
-            .map(|i| self.update_secondary_command_buffer(image_index, i))
-            .collect::<Result<Vec<_>, _>>()?;
+        // XXX - Not based on model number anymore
+        let secondary_command_buffers = &[self.update_secondary_command_buffer(image_index, 0)?];
         self.device
-            .cmd_execute_commands(command_buffer, &secondary_command_buffers[..]);
+            .cmd_execute_commands(command_buffer, secondary_command_buffers);
         self.device.cmd_end_render_pass(command_buffer);
 
-        // egui
-        let egui_integration = self.data.egui_integration.as_mut().unwrap();
-        let theme = self.data.theme.as_mut().unwrap();
-        match theme {
-            EguiTheme::Dark => egui_integration
-                .context()
-                .set_visuals(egui::style::Visuals::dark()),
-            EguiTheme::Light => egui_integration
-                .context()
-                .set_visuals(egui::style::Visuals::light()),
-        }
-
-        egui_integration.begin_frame(window);
-        egui::SidePanel::left("my_side_panel").show(&egui_integration.context(), |ui| {
-            ui.heading("vulkan-engine");
-            ui.label("v0.1.0");
-            ui.separator();
-            ui.horizontal(|ui| {
-                ui.label("Theme");
-                let id = ui.make_persistent_id("theme_combo_box_side");
-                egui::ComboBox::from_id_source(id)
-                    .selected_text(format!("{theme:?}"))
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(theme, EguiTheme::Dark, "Dark");
-                        ui.selectable_value(theme, EguiTheme::Light, "Light");
-                    });
-            });
-            ui.separator();
-        });
-        egui::Window::new("Window 1")
-            .resizable(true)
-            .scroll2([true, true])
-            .show(&egui_integration.context(), |ui| {
-                ui.heading("vulkan-engine");
-                ui.label("v0.1.0");
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.label("Theme");
-                    let id = ui.make_persistent_id("theme_combo_box_window");
-                    egui::ComboBox::from_id_source(id)
-                        .selected_text(format!("{theme:?}"))
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(theme, EguiTheme::Dark, "Dark");
-                            ui.selectable_value(theme, EguiTheme::Light, "Light");
-                        });
-                });
-                ui.separator();
-            });
-        let output = egui_integration.end_frame(window);
-        // TODO - Get pixels_per_point value from somewhere
-        let clipped_meshes = egui_integration.context().tessellate(output.shapes, 1.25);
-        egui_integration.paint(
-            command_buffer,
-            image_index,
-            clipped_meshes,
-            output.textures_delta,
-        )?;
+        self.update_gui(command_buffer, image_index, window)?;
 
         self.device.end_command_buffer(command_buffer)?;
 
@@ -854,7 +868,7 @@ fn main() -> Result<()> {
                         if !minimized && !destroyed && !target.exiting() =>
                     {
                         if let Err(err) = render(&mut engine, &mut window) {
-                            error!("Cannot render: {err}");
+                            error!("Cannot render frame: {err}");
                             unsafe {
                                 engine.destroy();
                             }
