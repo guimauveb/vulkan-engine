@@ -1,0 +1,27 @@
+[package]
+name = "vulkan-engine"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+log = "0.4"
+cgmath = "0.18"
+png = "0.17"
+pretty_env_logger = "0.4"
+thiserror = "1"
+tobj = { version = "3", features = ["log"] }
+vulkanalia = { version = "0.22", features = ["libloading", "provisional", "window"] }
+winit = "0.29"
+egui = "0.25"
+egui-winit = { version = "0.25", default-features = false, features = ["wayland"] }
+raw-window-handle = "0.5"
+hashbrown = "0.14"
+minstant = "0.1"
+bytemuck = "1.15"
+
+[profile.release]
+debug = true
+# panic = "abort"
+# codegen-units = 1
+# lto = true
