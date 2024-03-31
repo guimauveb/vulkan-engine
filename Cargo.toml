@@ -21,7 +21,6 @@ minstant = "0.1"
 bytemuck = "1.15"
 
 [profile.release]
-debug = true
-# panic = "abort"
-# codegen-units = 1
-# lto = true
+panic = "abort"
+codegen-units = 1
+lto = true

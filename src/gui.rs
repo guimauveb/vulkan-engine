@@ -1,17 +1,19 @@
+// TODO - Refactoring
+
 use {
     super::{
         buffer::{create_buffer, create_index_buffer, create_vertex_buffer},
         command_buffers::create_command_pool,
         image::{create_image, create_image_view},
     },
-    anyhow::anyhow,
-    anyhow::Result,
+    anyhow::{anyhow, Result},
     bytemuck::bytes_of,
     egui::{
         epaint::{ahash::AHashMap, image::ImageDelta},
         Context, TextureId, TexturesDelta,
     },
     egui_winit::{EventResponse, State},
+    log::error,
     raw_window_handle::HasRawDisplayHandle,
     std::{
         mem::{size_of, size_of_val},
@@ -77,7 +79,7 @@ pub struct Integration {
     device: Device,
     queue: vk::Queue,
     queue_family_index: u32,
-    // One per framebuffer
+    // TODO - Remove when buffer creation has been updated
     command_pools: Vec<vk::CommandPool>,
     descriptor_pool: vk::DescriptorPool,
     descriptor_set_layouts: Vec<vk::DescriptorSetLayout>,
@@ -534,7 +536,7 @@ impl Integration {
         self.egui_winit.egui_ctx().clone()
     }
 
-    // TODO - Refacto
+    // TODO - Refactoring
     fn update_texture(&mut self, texture_id: TextureId, delta: ImageDelta) -> Result<()> {
         // Extract pixel data from egui
         let data: Vec<u8> = match &delta.image {
@@ -589,8 +591,8 @@ impl Integration {
                 )?
             }
         };
+        // Copy to staging buffer
         unsafe {
-            // Copy to staging buffer
             let memory = self.device.map_memory(
                 staging_buffer_memory,
                 0,
@@ -598,9 +600,6 @@ impl Integration {
                 vk::MemoryMapFlags::empty(),
             )?;
             copy_nonoverlapping(data.as_ptr(), memory.cast(), data.len());
-            // TODO - Unmap and free memory here?
-            //self.device.unmap_memory(staging_buffer_memory);
-            //self.device.free_memory(staging_buffer_memory, None);
         }
 
         let (texture_image, texture_image_memory) = unsafe {
@@ -620,7 +619,8 @@ impl Integration {
                 vk::MemoryPropertyFlags::DEVICE_LOCAL,
             )?
         };
-        // TODO - self.texture_image_infos.insert(texture_id, info);
+        // TODO - Update create_image or use a specific method to retrieve the ImageCreateInfo.
+        // self.texture_image_infos.insert(texture_id, info);
         let texture_image_view = unsafe {
             create_image_view(
                 &self.device,
@@ -865,7 +865,7 @@ impl Integration {
 
             // update dsc set
             let dsc_set = {
-                // XXX - The slice must be created via a `let` binding. Creating the value in the
+                // XXX - The slice must be created via a `let` binding. Creating a temporary value in the
                 // function call in release mode triggers a validation error and a segmentation fault.
                 let set_layouts = &[self.descriptor_set_layouts[0]];
                 let dsc_alloc_info = vk::DescriptorSetAllocateInfo::builder()
@@ -879,7 +879,7 @@ impl Integration {
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
                 .sampler(self.sampler)
                 .build();
-            // XXX - The slice must be created via a `let` binding. Creating the value in the
+            // XXX - The slice must be created via a `let` binding. Creating a temporary value in the
             // function call in release mode triggers a validation error and a segmentation fault.
             let image_info = &[image_info];
             let dsc_writes = [vk::WriteDescriptorSet::builder()
@@ -893,7 +893,7 @@ impl Integration {
                 self.device
                     .update_descriptor_sets(&dsc_writes, &[] as &[vk::CopyDescriptorSet]);
             }
-            // register new texture
+            // Register new texture
             self.texture_images.insert(texture_id, texture_image);
             self.texture_allocations
                 .insert(texture_id, texture_image_memory);
@@ -902,7 +902,7 @@ impl Integration {
             self.texture_desc_sets.insert(texture_id, dsc_set);
         }
 
-        // cleanup
+        // Cleanup
         unsafe {
             self.device.destroy_buffer(staging_buffer, None);
             self.device.free_memory(staging_buffer_memory, None);
@@ -944,7 +944,7 @@ impl Integration {
         };
         let index_buffer_end = unsafe { index_buffer_ptr.add(Self::index_buffer_size() as usize) };
 
-        // begin render pass
+        // Begin render pass
         unsafe {
             self.device.cmd_begin_render_pass(
                 command_buffer,
@@ -1040,7 +1040,7 @@ impl Integration {
                             &[],
                         );
                     } else {
-                        eprintln!(
+                        error!(
                             "This UserTexture has already been unregistered: {:?}",
                             mesh.texture_id
                         );
@@ -1081,7 +1081,7 @@ impl Integration {
             vertex_buffer_ptr = vertex_buffer_next;
             index_buffer_ptr = index_buffer_next;
 
-            // record draw commands
+            // Record draw commands
             unsafe {
                 let min = clip_rect.min;
                 let min = egui::Pos2 {
@@ -1152,7 +1152,8 @@ impl Integration {
                 }
             }
         }
-        // end render pass
+
+        // End render pass
         unsafe {
             self.device.cmd_end_render_pass(command_buffer);
             self.device
@@ -1175,7 +1176,7 @@ impl Integration {
         self.physical_width = physical_width;
         self.physical_height = physical_height;
 
-        // release vk objects to be regenerated.
+        // Release vk objects to be regenerated.
         unsafe {
             self.device.destroy_render_pass(self.render_pass, None);
             self.device.destroy_pipeline(self.pipeline, None);
@@ -1189,7 +1190,7 @@ impl Integration {
 
         let swapchain_images = unsafe { self.device.get_swapchain_images_khr(swapchain)? };
 
-        // Recreate render pass for update surface format
+        // Recreate render pass
         self.render_pass = unsafe {
             self.device.create_render_pass(
                 &vk::RenderPassCreateInfo::builder()
@@ -1222,7 +1223,7 @@ impl Integration {
             )
         }?;
 
-        // Recreate pipeline for update render pass
+        // Recreate pipeline
         self.pipeline = {
             let bindings = [vk::VertexInputBindingDescription::builder()
                 .binding(0)
@@ -1230,21 +1231,21 @@ impl Integration {
                 .stride(5 * std::mem::size_of::<f32>() as u32)
                 .build()];
             let attributes = [
-                // position
+                // Position
                 vk::VertexInputAttributeDescription::builder()
                     .binding(0)
                     .offset(0)
                     .location(0)
                     .format(vk::Format::R32G32_SFLOAT)
                     .build(),
-                // uv
+                // UV
                 vk::VertexInputAttributeDescription::builder()
                     .binding(0)
                     .offset(8)
                     .location(1)
                     .format(vk::Format::R32G32_SFLOAT)
                     .build(),
-                // color
+                // Color
                 vk::VertexInputAttributeDescription::builder()
                     .binding(0)
                     .offset(16)

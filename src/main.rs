@@ -1,4 +1,5 @@
 // TODO - Custom build to automatically compile shaders when compiling the program
+
 mod buffer;
 mod camera;
 mod command_buffers;
@@ -178,7 +179,6 @@ unsafe fn create_instance(
         .iter()
         .map(|l| l.layer_name)
         .collect::<HashSet<_>>();
-    println!("ENABLE_VALIDATION_LAYER: {ENABLE_VALIDATION_LAYER}");
     if ENABLE_VALIDATION_LAYER && !available_layers.contains(&VALIDATION_LAYER) {
         return Err(anyhow!("Validation layer requested but not supported."));
     }

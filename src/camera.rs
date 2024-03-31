@@ -1,8 +1,3 @@
-// TODO - Fix border detection
-//      - Implement different types of cameras (FPS, TPS)
-//      - Adjust speed according to framerate
-//      - Use quaternions instead of Euler angles
-//      - Camera trait
 use {
     super::{Mat4, Point3, Vec3},
     cgmath::{vec3, Angle, Deg, InnerSpace},
@@ -19,6 +14,7 @@ const EDGE_STEP: f32 = 1.0;
 /// Set the borders of the window to be `MARGIN` (pixels?) away from the actual borders.
 const MARGIN: f32 = 1.0;
 
+// TODO - Implement different types of cameras (FPS, TPS) that all implement a Camera trait
 #[derive(Debug, Clone, Copy)]
 pub struct Camera {
     eye: Point3,
@@ -64,7 +60,7 @@ impl Camera {
     }
 
     fn update(&mut self) {
-        // XXX - Try rotating using rotations matrices and quaternions
+        // TODO - Try rotating using rotations matrices and quaternions
         let (yaw_cos, yaw_sin, pitch_cos, pitch_sin) = (
             Deg(self.yaw).cos(),
             Deg(self.yaw).sin(),
@@ -80,8 +76,8 @@ impl Camera {
         Self::init(eye, target, up, width, height)
     }
 
-    // TODO - Update char keys with winit new keyboard events
     pub fn on_keyboard(&mut self, key: Key) {
+        // FIXME - Arrow keys not detected
         match key {
             Key::Named(key) => match key {
                 NamedKey::ArrowUp => {
@@ -136,6 +132,7 @@ impl Camera {
         }
     }
 
+    // FIXME - Border detection
     pub fn on_mouse(&mut self, position: PhysicalPosition<f32>) {
         let (delta_x, delta_y) = (
             position.x - self.mouse_position.x,
