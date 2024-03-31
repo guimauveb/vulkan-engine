@@ -615,8 +615,6 @@ impl Engine {
                     });
             });
             ui.separator();
-            ui.hyperlink("https://github.com/emilk/egui");
-            ui.separator();
         });
         egui::Window::new("Window 1")
             .resizable(true)
@@ -635,8 +633,6 @@ impl Engine {
                             ui.selectable_value(theme, EguiTheme::Light, "Light");
                         });
                 });
-                ui.separator();
-                ui.hyperlink("https://github.com/emilk/egui");
                 ui.separator();
             });
         let output = egui_integration.end_frame(window);
