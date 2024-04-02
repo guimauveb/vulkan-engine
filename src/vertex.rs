@@ -24,33 +24,30 @@ impl Vertex {
         }
     }
 
-    pub fn binding_description() -> vk::VertexInputBindingDescription {
+    pub fn binding_description() -> impl vk::Cast<Target = vk::VertexInputBindingDescription> {
         vk::VertexInputBindingDescription::builder()
             .binding(0)
             .stride(size_of::<Vertex>() as u32)
             .input_rate(vk::VertexInputRate::VERTEX)
-            .build()
     }
 
-    pub fn attribute_descriptions() -> [vk::VertexInputAttributeDescription; 3] {
+    pub fn attribute_descriptions(
+    ) -> [impl vk::Cast<Target = vk::VertexInputAttributeDescription>; 3] {
         let pos = vk::VertexInputAttributeDescription::builder()
             .binding(0)
             .location(0)
             .format(vk::Format::R32G32B32_SFLOAT)
-            .offset(0)
-            .build();
+            .offset(0);
         let color = vk::VertexInputAttributeDescription::builder()
             .binding(0)
             .location(1)
             .format(vk::Format::R32G32B32_SFLOAT)
-            .offset(size_of::<Vec3>() as u32)
-            .build();
+            .offset(size_of::<Vec3>() as u32);
         let text_coord = vk::VertexInputAttributeDescription::builder()
             .binding(0)
             .location(2)
             .format(vk::Format::R32G32_SFLOAT)
-            .offset((size_of::<Vec3>() + size_of::<Vec3>()) as u32)
-            .build();
+            .offset((size_of::<Vec3>() + size_of::<Vec3>()) as u32);
 
         [pos, color, text_coord]
     }

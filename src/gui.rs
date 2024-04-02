@@ -10,9 +10,12 @@ use {
     bytemuck::bytes_of,
     egui::{
         epaint::{ahash::AHashMap, image::ImageDelta},
-        Context, TextureId, TexturesDelta,
+        Context, FontDefinitions, FullOutput, Style, TextureId, TexturesDelta,
     },
-    egui_winit::{EventResponse, State},
+    egui_winit::{
+        winit::{event::WindowEvent, window::Window},
+        EventResponse, State,
+    },
     log::error,
     raw_window_handle::HasRawDisplayHandle,
     std::{
@@ -25,10 +28,17 @@ use {
     },
 };
 
-pub fn insert_image_memory_barrier(
+#[derive(Default, Debug, PartialEq, Eq)]
+pub enum EguiTheme {
+    #[default]
+    Dark,
+    Light,
+}
+
+fn insert_image_memory_barrier(
     device: &Device,
-    cmd_buff: &vk::CommandBuffer,
-    image: &vk::Image,
+    cmd_buff: vk::CommandBuffer,
+    image: vk::Image,
     src_q_family_index: u32,
     dst_q_family_index: u32,
     src_access_mask: vk::AccessFlags,
@@ -37,7 +47,7 @@ pub fn insert_image_memory_barrier(
     new_image_layout: vk::ImageLayout,
     src_stage_mask: vk::PipelineStageFlags,
     dst_stage_mask: vk::PipelineStageFlags,
-    subresource_range: vk::ImageSubresourceRange,
+    subresource_range: impl vk::Cast<Target = vk::ImageSubresourceRange>,
 ) {
     let image_memory_barrier = vk::ImageMemoryBarrier::builder()
         .src_queue_family_index(src_q_family_index)
@@ -46,12 +56,11 @@ pub fn insert_image_memory_barrier(
         .dst_access_mask(dst_access_mask)
         .old_layout(old_image_layout)
         .new_layout(new_image_layout)
-        .image(*image)
-        .subresource_range(subresource_range)
-        .build();
+        .image(image)
+        .subresource_range(subresource_range);
     unsafe {
         device.cmd_pipeline_barrier(
-            *cmd_buff,
+            cmd_buff,
             src_stage_mask,
             dst_stage_mask,
             vk::DependencyFlags::BY_REGION,
@@ -62,22 +71,95 @@ pub fn insert_image_memory_barrier(
     }
 }
 
-#[derive(Default, Debug, PartialEq, Eq)]
-pub enum EguiTheme {
-    #[default]
-    Dark,
-    Light,
+unsafe fn create_descriptor_pool(
+    device: &Device,
+    descriptor_count: u32,
+) -> Result<vk::DescriptorPool> {
+    Ok(device.create_descriptor_pool(
+        &vk::DescriptorPoolCreateInfo::builder()
+            .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET)
+            .max_sets(descriptor_count)
+            .pool_sizes(&[vk::DescriptorPoolSize::builder()
+                .type_(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                .descriptor_count(descriptor_count)]),
+        None,
+    )?)
+}
+
+unsafe fn create_descriptor_set_layout(
+    device: &Device,
+    image_count: u32,
+) -> Result<Vec<vk::DescriptorSetLayout>> {
+    Ok((0..image_count)
+        .map(|_| {
+            device.create_descriptor_set_layout(
+                &vk::DescriptorSetLayoutCreateInfo::builder().bindings(&[
+                    vk::DescriptorSetLayoutBinding::builder()
+                        .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
+                        .descriptor_count(1)
+                        .binding(0)
+                        .stage_flags(vk::ShaderStageFlags::FRAGMENT),
+                ]),
+                None,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?)
+}
+
+unsafe fn create_render_pass(device: &Device, format: vk::Format) -> Result<vk::RenderPass> {
+    Ok(device.create_render_pass(
+        &vk::RenderPassCreateInfo::builder()
+            .attachments(&[vk::AttachmentDescription::builder()
+                .format(format)
+                .samples(vk::SampleCountFlags::_1)
+                .load_op(vk::AttachmentLoadOp::LOAD)
+                .store_op(vk::AttachmentStoreOp::STORE)
+                .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
+                .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
+                .initial_layout(vk::ImageLayout::PRESENT_SRC_KHR)
+                .final_layout(vk::ImageLayout::PRESENT_SRC_KHR)])
+            .subpasses(&[vk::SubpassDescription::builder()
+                .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
+                .color_attachments(&[vk::AttachmentReference::builder()
+                    .attachment(0)
+                    .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)])])
+            .dependencies(&[vk::SubpassDependency::builder()
+                .src_subpass(vk::SUBPASS_EXTERNAL)
+                .dst_subpass(0)
+                .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
+                .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
+                .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
+                .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)]),
+        None,
+    )?)
+}
+
+unsafe fn create_pipeline_layout(
+    device: &Device,
+    descriptor_set_layouts: &[vk::DescriptorSetLayout],
+) -> Result<vk::PipelineLayout> {
+    Ok(device.create_pipeline_layout(
+        &vk::PipelineLayoutCreateInfo::builder()
+            .set_layouts(&descriptor_set_layouts)
+            .push_constant_ranges(&[
+                vk::PushConstantRange::builder()
+                    .stage_flags(vk::ShaderStageFlags::VERTEX)
+                    .offset(0)
+                    .size(size_of::<f32>() as u32 * 2), // screen size
+            ]),
+        None,
+    )?)
 }
 
 pub struct Integration {
     instance: Instance,
     physical_device: vk::PhysicalDevice,
+    device: Device,
     physical_width: u32,
     physical_height: u32,
     scale_factor: f64,
-    egui_winit: State,
-    device: Device,
-    queue: vk::Queue,
+    state: State,
+    graphics_queue: vk::Queue,
     queue_family_index: u32,
     // TODO - Remove when buffer creation has been updated
     command_pools: Vec<vk::CommandPool>,
@@ -111,29 +193,27 @@ impl Integration {
         1024 * 1024 * 2
     }
 
-    pub fn new<H: HasRawDisplayHandle>(
+    pub unsafe fn new<H: HasRawDisplayHandle>(
         surface: vk::SurfaceKHR,
-        instance: Instance,
+        format: vk::Format,
         physical_device: vk::PhysicalDevice,
         device: Device,
-        queue: vk::Queue,
+        instance: Instance,
+        graphics_queue: vk::Queue,
+        queue_family_index: u32,
         swapchain: vk::SwapchainKHR,
-        surface_format: vk::Format,
         display_target: &H,
         physical_width: u32,
         physical_height: u32,
         scale_factor: f64,
-        font_definitions: egui::FontDefinitions,
-        style: egui::Style,
-        queue_family_index: u32,
+        font_definitions: FontDefinitions,
+        style: Style,
     ) -> Result<Self> {
-        // Create context
         let context = Context::default();
         context.set_fonts(font_definitions);
         context.set_style(style);
-
         let viewport_id = context.viewport_id();
-        let egui_winit = egui_winit::State::new(
+        let state = State::new(
             context,
             viewport_id,
             display_target,
@@ -141,100 +221,19 @@ impl Integration {
             None,
         );
 
-        // Get swapchain_images to get len of swapchain images and to create framebuffers
         let swapchain_images = unsafe { device.get_swapchain_images_khr(swapchain)? };
+        let image_count = swapchain_images.len() as u32;
 
-        // Create DescriptorPool
-        let descriptor_pool = unsafe {
-            device.create_descriptor_pool(
-                &vk::DescriptorPoolCreateInfo::builder()
-                    .flags(vk::DescriptorPoolCreateFlags::FREE_DESCRIPTOR_SET)
-                    .max_sets(1024)
-                    .pool_sizes(&[vk::DescriptorPoolSize::builder()
-                        .type_(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                        .descriptor_count(1024)
-                        .build()]),
-                None,
-            )
-        }?;
-
-        // Create DescriptorSetLayouts
-        let descriptor_set_layouts = {
-            let mut sets = vec![];
-            for _ in 0..swapchain_images.len() {
-                sets.push(unsafe {
-                    device.create_descriptor_set_layout(
-                        &vk::DescriptorSetLayoutCreateInfo::builder().bindings(&[
-                            vk::DescriptorSetLayoutBinding::builder()
-                                .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
-                                .descriptor_count(1)
-                                .binding(0)
-                                .stage_flags(vk::ShaderStageFlags::FRAGMENT)
-                                .build(),
-                        ]),
-                        None,
-                    )
-                }?);
-            }
-            sets
-        };
-
-        // Create RenderPass
-        let render_pass = unsafe {
-            device.create_render_pass(
-                &vk::RenderPassCreateInfo::builder()
-                    .attachments(&[vk::AttachmentDescription::builder()
-                        .format(surface_format)
-                        .samples(vk::SampleCountFlags::_1)
-                        .load_op(vk::AttachmentLoadOp::LOAD)
-                        .store_op(vk::AttachmentStoreOp::STORE)
-                        .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
-                        .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
-                        .initial_layout(vk::ImageLayout::PRESENT_SRC_KHR)
-                        .final_layout(vk::ImageLayout::PRESENT_SRC_KHR)
-                        .build()])
-                    .subpasses(&[vk::SubpassDescription::builder()
-                        .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
-                        .color_attachments(&[vk::AttachmentReference::builder()
-                            .attachment(0)
-                            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                            .build()])
-                        .build()])
-                    .dependencies(&[vk::SubpassDependency::builder()
-                        .src_subpass(vk::SUBPASS_EXTERNAL)
-                        .dst_subpass(0)
-                        .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-                        .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-                        .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-                        .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-                        .build()]),
-                None,
-            )
-        }?;
-
-        // Create PipelineLayout
-        let pipeline_layout = unsafe {
-            device.create_pipeline_layout(
-                &vk::PipelineLayoutCreateInfo::builder()
-                    .set_layouts(&descriptor_set_layouts)
-                    .push_constant_ranges(&[vk::PushConstantRange::builder()
-                        .stage_flags(vk::ShaderStageFlags::VERTEX)
-                        .offset(0)
-                        .size(size_of::<f32>() as u32 * 2) // screen size
-                        .build()]),
-                None,
-            )
-        }?;
-
-        // Create Pipeline
+        let descriptor_pool = create_descriptor_pool(&device, image_count)?;
+        let descriptor_set_layouts = create_descriptor_set_layout(&device, image_count)?;
+        let render_pass = create_render_pass(&device, format)?;
+        let pipeline_layout = create_pipeline_layout(&device, &descriptor_set_layouts)?;
+        // TODO - Extract in method
         let pipeline = {
             let bindings = [vk::VertexInputBindingDescription::builder()
                 .binding(0)
                 .input_rate(vk::VertexInputRate::VERTEX)
-                .stride(
-                    4 * std::mem::size_of::<f32>() as u32 + 4 * std::mem::size_of::<u8>() as u32,
-                )
-                .build()];
+                .stride(4 * size_of::<f32>() as u32 + 4 * size_of::<u8>() as u32)];
 
             let attributes = [
                 // position
@@ -242,29 +241,26 @@ impl Integration {
                     .binding(0)
                     .offset(0)
                     .location(0)
-                    .format(vk::Format::R32G32_SFLOAT)
-                    .build(),
+                    .format(vk::Format::R32G32_SFLOAT),
                 // uv
                 vk::VertexInputAttributeDescription::builder()
                     .binding(0)
                     .offset(8)
                     .location(1)
-                    .format(vk::Format::R32G32_SFLOAT)
-                    .build(),
+                    .format(vk::Format::R32G32_SFLOAT),
                 // color
                 vk::VertexInputAttributeDescription::builder()
                     .binding(0)
                     .offset(16)
                     .location(2)
-                    .format(vk::Format::R8G8B8A8_UNORM)
-                    .build(),
+                    .format(vk::Format::R8G8B8A8_UNORM),
             ];
 
             let vertex_shader_module = {
                 let bytes_code = include_bytes!("../shaders/gui/spv/vert.spv");
                 let shader_module_create_info = vk::ShaderModuleCreateInfo {
                     code_size: bytes_code.len(),
-                    code: bytes_code.as_ptr() as *const u32,
+                    code: bytes_code.as_ptr().cast(),
                     ..Default::default()
                 };
                 unsafe { device.create_shader_module(&shader_module_create_info, None) }?
@@ -273,7 +269,7 @@ impl Integration {
                 let bytes_code = include_bytes!("../shaders/gui/spv/frag.spv");
                 let shader_module_create_info = vk::ShaderModuleCreateInfo {
                     code_size: bytes_code.len(),
-                    code: bytes_code.as_ptr() as *const u32,
+                    code: bytes_code.as_ptr().cast(),
                     ..Default::default()
                 };
                 unsafe { device.create_shader_module(&shader_module_create_info, None) }?
@@ -282,13 +278,11 @@ impl Integration {
                 vk::PipelineShaderStageCreateInfo::builder()
                     .stage(vk::ShaderStageFlags::VERTEX)
                     .module(vertex_shader_module)
-                    .name(b"main\0")
-                    .build(),
+                    .name(b"main\0"),
                 vk::PipelineShaderStageCreateInfo::builder()
                     .stage(vk::ShaderStageFlags::FRAGMENT)
                     .module(fragment_shader_module)
-                    .name(b"main\0")
-                    .build(),
+                    .name(b"main\0"),
             ];
 
             let input_assembly_info = vk::PipelineInputAssemblyStateCreateInfo::builder()
@@ -307,8 +301,7 @@ impl Integration {
             let stencil_op = vk::StencilOpState::builder()
                 .fail_op(vk::StencilOp::KEEP)
                 .pass_op(vk::StencilOp::KEEP)
-                .compare_op(vk::CompareOp::ALWAYS)
-                .build();
+                .compare_op(vk::CompareOp::ALWAYS);
             let depth_stencil_info = vk::PipelineDepthStencilStateCreateInfo::builder()
                 .depth_test_enable(false)
                 .depth_write_enable(false)
@@ -326,8 +319,7 @@ impl Integration {
                 )
                 .blend_enable(true)
                 .src_color_blend_factor(vk::BlendFactor::ONE)
-                .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-                .build()];
+                .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)];
             let color_blend_info = vk::PipelineColorBlendStateCreateInfo::builder()
                 .attachments(&color_blend_attachments);
             let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
@@ -351,8 +343,7 @@ impl Integration {
                 .dynamic_state(&dynamic_state_info)
                 .layout(pipeline_layout)
                 .render_pass(render_pass)
-                .subpass(0)
-                .build()];
+                .subpass(0)];
 
             let pipeline = unsafe {
                 device.create_graphics_pipelines(
@@ -394,15 +385,14 @@ impl Integration {
                     &vk::ImageViewCreateInfo::builder()
                         .image(*swapchain_image)
                         .view_type(vk::ImageViewType::_2D)
-                        .format(surface_format)
+                        .format(format)
                         .subresource_range(
                             vk::ImageSubresourceRange::builder()
                                 .aspect_mask(vk::ImageAspectFlags::COLOR)
                                 .base_mip_level(0)
                                 .level_count(1)
                                 .base_array_layer(0)
-                                .layer_count(1)
-                                .build(),
+                                .layer_count(1),
                         ),
                     None,
                 )
@@ -440,7 +430,7 @@ impl Integration {
                     &instance,
                     &device,
                     physical_device,
-                    queue,
+                    graphics_queue,
                     *command_pool,
                     &[], // Buffer will be used later, thus we don't copy anything to it now
                     Self::vertex_buffer_size(),
@@ -454,7 +444,7 @@ impl Integration {
                     &instance,
                     &device,
                     physical_device,
-                    queue,
+                    graphics_queue,
                     *command_pool,
                     &[], // Buffer will be used later, thus we don't copy anything to it now
                     Self::index_buffer_size(),
@@ -472,8 +462,7 @@ impl Integration {
                         .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                         .descriptor_count(1)
                         .binding(0)
-                        .stage_flags(vk::ShaderStageFlags::FRAGMENT)
-                        .build(),
+                        .stage_flags(vk::ShaderStageFlags::FRAGMENT),
                 ]),
                 None,
             )
@@ -486,10 +475,10 @@ impl Integration {
             physical_width,
             physical_height,
             scale_factor,
-            egui_winit,
+            state,
             device,
             queue_family_index,
-            queue,
+            graphics_queue,
             descriptor_pool,
             descriptor_set_layouts,
             pipeline_layout,
@@ -512,28 +501,24 @@ impl Integration {
         })
     }
 
-    pub fn handle_event(
-        &mut self,
-        window: &egui_winit::winit::window::Window,
-        winit_event: &egui_winit::winit::event::WindowEvent,
-    ) -> EventResponse {
-        self.egui_winit.on_window_event(window, winit_event)
+    pub fn handle_event(&mut self, window: &Window, winit_event: &WindowEvent) -> EventResponse {
+        self.state.on_window_event(window, winit_event)
     }
 
-    pub fn begin_frame(&mut self, window: &egui_winit::winit::window::Window) {
-        let raw_input = self.egui_winit.take_egui_input(window);
-        self.egui_winit.egui_ctx().begin_frame(raw_input);
+    pub fn begin_frame(&mut self, window: &Window) {
+        let raw_input = self.state.take_egui_input(window);
+        self.state.egui_ctx().begin_frame(raw_input);
     }
 
-    pub fn end_frame(&mut self, window: &egui_winit::winit::window::Window) -> egui::FullOutput {
-        let output = self.egui_winit.egui_ctx().end_frame();
-        self.egui_winit
+    pub fn end_frame(&mut self, window: &Window) -> FullOutput {
+        let output = self.state.egui_ctx().end_frame();
+        self.state
             .handle_platform_output(window, output.platform_output.clone());
         output
     }
 
     pub fn context(&self) -> Context {
-        self.egui_winit.egui_ctx().clone()
+        self.state.egui_ctx().clone()
     }
 
     // TODO - Refactoring
@@ -557,21 +542,19 @@ impl Integration {
         };
 
         let cmd_pool = {
-            let info = vk::CommandPoolCreateInfo::builder()
-                .queue_family_index(self.queue_family_index)
-                .build();
+            let info =
+                vk::CommandPoolCreateInfo::builder().queue_family_index(self.queue_family_index);
             unsafe { self.device.create_command_pool(&info, None)? }
         };
         let cmd_buff = {
             let info = vk::CommandBufferAllocateInfo::builder()
                 .command_buffer_count(1)
                 .command_pool(cmd_pool)
-                .level(vk::CommandBufferLevel::PRIMARY)
-                .build();
+                .level(vk::CommandBufferLevel::PRIMARY);
             unsafe { self.device.allocate_command_buffers(&info)?[0] }
         };
         let cmd_buff_fence = {
-            let info = vk::FenceCreateInfo::builder().build();
+            let info = vk::FenceCreateInfo::builder();
             unsafe { self.device.create_fence(&info, None)? }
         };
 
@@ -632,15 +615,14 @@ impl Integration {
         // Begin command buffer
         unsafe {
             let info = vk::CommandBufferBeginInfo::builder()
-                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
-                .build();
+                .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
             self.device.begin_command_buffer(cmd_buff, &info)?;
         }
         // Transition texture image for transfer dst
         insert_image_memory_barrier(
             &self.device,
-            &cmd_buff,
-            &texture_image,
+            cmd_buff,
+            texture_image,
             vk::QUEUE_FAMILY_IGNORED,
             vk::QUEUE_FAMILY_IGNORED,
             vk::AccessFlags::empty(), // NONE_KHR
@@ -654,8 +636,7 @@ impl Integration {
                 .base_array_layer(0)
                 .layer_count(1)
                 .base_mip_level(0)
-                .level_count(1)
-                .build(),
+                .level_count(1),
         );
         let region = vk::BufferImageCopy::builder()
             .buffer_offset(0)
@@ -666,16 +647,14 @@ impl Integration {
                     .aspect_mask(vk::ImageAspectFlags::COLOR)
                     .base_array_layer(0)
                     .layer_count(1)
-                    .mip_level(0)
-                    .build(),
+                    .mip_level(0),
             )
             .image_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
             .image_extent(vk::Extent3D {
                 width: delta.image.width() as u32,
                 height: delta.image.height() as u32,
                 depth: 1,
-            })
-            .build();
+            });
         unsafe {
             self.device.cmd_copy_buffer_to_image(
                 cmd_buff,
@@ -687,8 +666,8 @@ impl Integration {
         }
         insert_image_memory_barrier(
             &self.device,
-            &cmd_buff,
-            &texture_image,
+            cmd_buff,
+            texture_image,
             vk::QUEUE_FAMILY_IGNORED,
             vk::QUEUE_FAMILY_IGNORED,
             vk::AccessFlags::TRANSFER_WRITE,
@@ -702,19 +681,16 @@ impl Integration {
                 .base_array_layer(0)
                 .layer_count(1)
                 .base_mip_level(0)
-                .level_count(1)
-                .build(),
+                .level_count(1),
         );
         unsafe {
             self.device.end_command_buffer(cmd_buff)?;
         }
         let cmd_buffs = [cmd_buff];
-        let submit_infos = [vk::SubmitInfo::builder()
-            .command_buffers(&cmd_buffs)
-            .build()];
+        let submit_infos = [vk::SubmitInfo::builder().command_buffers(&cmd_buffs)];
         unsafe {
             self.device
-                .queue_submit(self.queue, &submit_infos, cmd_buff_fence)?;
+                .queue_submit(self.graphics_queue, &submit_infos, cmd_buff_fence)?;
             self.device
                 .wait_for_fences(&[cmd_buff_fence], true, u64::MAX)?;
         }
@@ -729,16 +705,15 @@ impl Integration {
                         .reset_command_pool(cmd_pool, vk::CommandPoolResetFlags::empty())?;
                     // Begin command buffer
                     let command_buffer_info = vk::CommandBufferBeginInfo::builder()
-                        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
-                        .build();
+                        .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT);
                     self.device
                         .begin_command_buffer(cmd_buff, &command_buffer_info)?;
 
                     // Transition existing image for transfer dst
                     insert_image_memory_barrier(
                         &self.device,
-                        &cmd_buff,
-                        existing_texture,
+                        cmd_buff,
+                        *existing_texture,
                         vk::QUEUE_FAMILY_IGNORED,
                         vk::QUEUE_FAMILY_IGNORED,
                         vk::AccessFlags::SHADER_READ,
@@ -752,14 +727,13 @@ impl Integration {
                             .base_array_layer(0)
                             .layer_count(1)
                             .base_mip_level(0)
-                            .level_count(1)
-                            .build(),
+                            .level_count(1),
                     );
                     // Transition new image for transfer src
                     insert_image_memory_barrier(
                         &self.device,
-                        &cmd_buff,
-                        &texture_image,
+                        cmd_buff,
+                        texture_image,
                         vk::QUEUE_FAMILY_IGNORED,
                         vk::QUEUE_FAMILY_IGNORED,
                         vk::AccessFlags::SHADER_READ,
@@ -773,8 +747,7 @@ impl Integration {
                             .base_array_layer(0)
                             .layer_count(1)
                             .base_mip_level(0)
-                            .level_count(1)
-                            .build(),
+                            .level_count(1),
                     );
                     let top_left = vk::Offset3D {
                         x: pos[0] as i32,
@@ -822,8 +795,8 @@ impl Integration {
                     // Transition existing image for shader read
                     insert_image_memory_barrier(
                         &self.device,
-                        &cmd_buff,
-                        existing_texture,
+                        cmd_buff,
+                        *existing_texture,
                         vk::QUEUE_FAMILY_IGNORED,
                         vk::QUEUE_FAMILY_IGNORED,
                         vk::AccessFlags::TRANSFER_WRITE,
@@ -837,20 +810,17 @@ impl Integration {
                             .base_array_layer(0)
                             .layer_count(1)
                             .base_mip_level(0)
-                            .level_count(1)
-                            .build(),
+                            .level_count(1),
                     );
                     self.device.end_command_buffer(cmd_buff)?;
                     let cmd_buffs = [cmd_buff];
-                    let submit_infos = [vk::SubmitInfo::builder()
-                        .command_buffers(&cmd_buffs)
-                        .build()];
+                    let submit_infos = [vk::SubmitInfo::builder().command_buffers(&cmd_buffs)];
                     self.device
-                        .queue_submit(self.queue, &submit_infos, cmd_buff_fence)?;
+                        .queue_submit(self.graphics_queue, &submit_infos, cmd_buff_fence)?;
                     self.device
                         .wait_for_fences(&[cmd_buff_fence], true, u64::MAX)?;
 
-                    // destroy texture_image and view
+                    // Destroy texture_image and view
                     self.device.destroy_image(texture_image, None);
                     self.device.destroy_image_view(texture_image_view, None);
                     self.device.free_memory(texture_image_memory, None);
@@ -861,32 +831,25 @@ impl Integration {
         } else {
             // Otherwise save the newly created texture
 
-            // update dsc set
+            // Update descriptor set
             let dsc_set = {
-                // XXX - The slice must be created via a `let` binding. Creating a temporary value in the
-                // function call in release mode triggers a validation error and a segmentation fault.
                 let set_layouts = &[self.descriptor_set_layouts[0]];
-                let dsc_alloc_info = vk::DescriptorSetAllocateInfo::builder()
+                let info = vk::DescriptorSetAllocateInfo::builder()
                     .descriptor_pool(self.descriptor_pool)
-                    .set_layouts(set_layouts)
-                    .build();
-                unsafe { self.device.allocate_descriptor_sets(&dsc_alloc_info)?[0] }
+                    .set_layouts(set_layouts);
+                unsafe { self.device.allocate_descriptor_sets(&info)?[0] }
             };
             let image_info = vk::DescriptorImageInfo::builder()
                 .image_view(texture_image_view)
                 .image_layout(vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL)
-                .sampler(self.sampler)
-                .build();
-            // XXX - The slice must be created via a `let` binding. Creating a temporary value in the
-            // function call in release mode triggers a validation error and a segmentation fault.
+                .sampler(self.sampler);
             let image_info = &[image_info];
             let dsc_writes = [vk::WriteDescriptorSet::builder()
                 .dst_set(dsc_set)
                 .descriptor_type(vk::DescriptorType::COMBINED_IMAGE_SAMPLER)
                 .dst_array_element(0)
                 .dst_binding(0)
-                .image_info(image_info)
-                .build()];
+                .image_info(image_info)];
             unsafe {
                 self.device
                     .update_descriptor_sets(&dsc_writes, &[] as &[vk::CopyDescriptorSet]);
@@ -951,14 +914,11 @@ impl Integration {
                     .framebuffer(self.framebuffers[image_index])
                     .clear_values(&[])
                     .render_area(
-                        vk::Rect2D::builder()
-                            .extent(
-                                vk::Extent2D::builder()
-                                    .width(self.physical_width)
-                                    .height(self.physical_height)
-                                    .build(),
-                            )
-                            .build(),
+                        vk::Rect2D::builder().extent(
+                            vk::Extent2D::builder()
+                                .width(self.physical_width)
+                                .height(self.physical_height),
+                        ),
                     ),
                 vk::SubpassContents::INLINE,
             );
@@ -989,8 +949,7 @@ impl Integration {
                 .width(self.physical_width as f32)
                 .height(self.physical_height as f32)
                 .min_depth(0.0)
-                .max_depth(1.0)
-                .build();
+                .max_depth(1.0);
             self.device.cmd_set_viewport(command_buffer, 0, &[viewport]);
             let (width_points, height_points) = (
                 self.physical_width as f32 / self.scale_factor as f32,
@@ -1106,16 +1065,13 @@ impl Integration {
                         .offset(
                             vk::Offset2D::builder()
                                 .x(min.x.round() as i32)
-                                .y(min.y.round() as i32)
-                                .build(),
+                                .y(min.y.round() as i32),
                         )
                         .extent(
                             vk::Extent2D::builder()
                                 .width((max.x.round() - min.x) as u32)
-                                .height((max.y.round() - min.y) as u32)
-                                .build(),
-                        )
-                        .build()],
+                                .height((max.y.round() - min.y) as u32),
+                        )],
                 );
                 self.device.cmd_draw_indexed(
                     command_buffer,
@@ -1163,8 +1119,8 @@ impl Integration {
         Ok(())
     }
 
-    /// Update swapchain.
-    pub fn update_swapchain(
+    /// Recreate swapchain.
+    pub fn recreate_swapchain(
         &mut self,
         physical_width: u32,
         physical_height: u32,
@@ -1200,23 +1156,19 @@ impl Integration {
                         .stencil_load_op(vk::AttachmentLoadOp::DONT_CARE)
                         .stencil_store_op(vk::AttachmentStoreOp::DONT_CARE)
                         .initial_layout(vk::ImageLayout::PRESENT_SRC_KHR)
-                        .final_layout(vk::ImageLayout::PRESENT_SRC_KHR)
-                        .build()])
+                        .final_layout(vk::ImageLayout::PRESENT_SRC_KHR)])
                     .subpasses(&[vk::SubpassDescription::builder()
                         .pipeline_bind_point(vk::PipelineBindPoint::GRAPHICS)
                         .color_attachments(&[vk::AttachmentReference::builder()
                             .attachment(0)
-                            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                            .build()])
-                        .build()])
+                            .layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)])])
                     .dependencies(&[vk::SubpassDependency::builder()
                         .src_subpass(vk::SUBPASS_EXTERNAL)
                         .dst_subpass(0)
                         .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
                         .dst_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
                         .src_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-                        .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)
-                        .build()]),
+                        .dst_stage_mask(vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)]),
                 None,
             )
         }?;
@@ -1226,37 +1178,33 @@ impl Integration {
             let bindings = [vk::VertexInputBindingDescription::builder()
                 .binding(0)
                 .input_rate(vk::VertexInputRate::VERTEX)
-                .stride(5 * std::mem::size_of::<f32>() as u32)
-                .build()];
+                .stride(5 * size_of::<f32>() as u32)];
             let attributes = [
                 // Position
                 vk::VertexInputAttributeDescription::builder()
                     .binding(0)
                     .offset(0)
                     .location(0)
-                    .format(vk::Format::R32G32_SFLOAT)
-                    .build(),
+                    .format(vk::Format::R32G32_SFLOAT),
                 // UV
                 vk::VertexInputAttributeDescription::builder()
                     .binding(0)
                     .offset(8)
                     .location(1)
-                    .format(vk::Format::R32G32_SFLOAT)
-                    .build(),
+                    .format(vk::Format::R32G32_SFLOAT),
                 // Color
                 vk::VertexInputAttributeDescription::builder()
                     .binding(0)
                     .offset(16)
                     .location(2)
-                    .format(vk::Format::R8G8B8A8_UNORM)
-                    .build(),
+                    .format(vk::Format::R8G8B8A8_UNORM),
             ];
 
             let vertex_shader_module = {
                 let bytes_code = include_bytes!("../shaders/gui/spv/vert.spv");
                 let shader_module_create_info = vk::ShaderModuleCreateInfo {
                     code_size: bytes_code.len(),
-                    code: bytes_code.as_ptr() as *const u32,
+                    code: bytes_code.as_ptr().cast(),
                     ..Default::default()
                 };
                 unsafe {
@@ -1268,7 +1216,7 @@ impl Integration {
                 let bytes_code = include_bytes!("../shaders/gui/spv/frag.spv");
                 let shader_module_create_info = vk::ShaderModuleCreateInfo {
                     code_size: bytes_code.len(),
-                    code: bytes_code.as_ptr() as *const u32,
+                    code: bytes_code.as_ptr().cast(),
                     ..Default::default()
                 };
                 unsafe {
@@ -1280,13 +1228,11 @@ impl Integration {
                 vk::PipelineShaderStageCreateInfo::builder()
                     .stage(vk::ShaderStageFlags::VERTEX)
                     .module(vertex_shader_module)
-                    .name(b"main\0")
-                    .build(),
+                    .name(b"main\0"),
                 vk::PipelineShaderStageCreateInfo::builder()
                     .stage(vk::ShaderStageFlags::FRAGMENT)
                     .module(fragment_shader_module)
-                    .name(b"main\0")
-                    .build(),
+                    .name(b"main\0"),
             ];
 
             let input_assembly_info = vk::PipelineInputAssemblyStateCreateInfo::builder()
@@ -1305,8 +1251,7 @@ impl Integration {
             let stencil_op = vk::StencilOpState::builder()
                 .fail_op(vk::StencilOp::KEEP)
                 .pass_op(vk::StencilOp::KEEP)
-                .compare_op(vk::CompareOp::ALWAYS)
-                .build();
+                .compare_op(vk::CompareOp::ALWAYS);
             let depth_stencil_info = vk::PipelineDepthStencilStateCreateInfo::builder()
                 .depth_test_enable(true)
                 .depth_write_enable(true)
@@ -1324,8 +1269,7 @@ impl Integration {
                 )
                 .blend_enable(true)
                 .src_color_blend_factor(vk::BlendFactor::ONE)
-                .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-                .build()];
+                .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)];
             let color_blend_info = vk::PipelineColorBlendStateCreateInfo::builder()
                 .attachments(&color_blend_attachments);
             let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
@@ -1349,8 +1293,7 @@ impl Integration {
                 .dynamic_state(&dynamic_state_info)
                 .layout(self.pipeline_layout)
                 .render_pass(self.render_pass)
-                .subpass(0)
-                .build()];
+                .subpass(0)];
 
             let pipeline = unsafe {
                 self.device.create_graphics_pipelines(
@@ -1384,8 +1327,7 @@ impl Integration {
                                 .base_mip_level(0)
                                 .level_count(1)
                                 .base_array_layer(0)
-                                .layer_count(1)
-                                .build(),
+                                .layer_count(1),
                         ),
                     None,
                 )

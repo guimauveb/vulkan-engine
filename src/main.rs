@@ -23,6 +23,7 @@ use {
     command_buffers::{create_command_buffers, create_command_pool},
     descriptor_sets::{create_descriptor_pool, create_descriptor_sets},
     device::{create_logical_device, pick_physical_device, QueueFamilyIndices},
+    egui::{FontDefinitions, Style},
     gui::{EguiTheme, Integration},
     hashbrown::HashSet,
     image::{create_color_objects, create_depth_objects, create_image_view, get_depth_format},
@@ -53,7 +54,7 @@ use {
 };
 
 /// Whether validation layers should be enabled.
-const ENABLE_VALIDATION_LAYER: bool = cfg!(debug_assertions);
+const ENABLE_VALIDATION_LAYER: bool = true; // cfg!(debug_assertions);
 
 /// Names of the validation layer.
 const VALIDATION_LAYER: vk::ExtensionName =
@@ -355,19 +356,19 @@ impl Engine {
 
         let egui_integration = gui::Integration::new(
             data.surface,
-            instance.clone(),
+            data.swapchain_format,
             data.physical_device,
             device.clone(),
+            instance.clone(),
             data.graphics_queue,
+            data.graphics_queue_family_index,
             data.swapchain,
-            data.swapchain_format,
             window,
             data.swapchain_extent.width,
             data.swapchain_extent.height,
             window.scale_factor(),
-            egui::FontDefinitions::default(),
-            egui::Style::default(),
-            data.graphics_queue_family_index,
+            FontDefinitions::default(),
+            Style::default(),
         )?;
         data.theme = Some(EguiTheme::Dark);
         data.egui_integration = Some(egui_integration);
@@ -409,9 +410,8 @@ impl Engine {
             self.data.swapchain_extent.height,
         );
 
-        // egui
         if let Some(egui) = self.data.egui_integration.as_mut() {
-            egui.update_swapchain(
+            egui.recreate_swapchain(
                 self.data.swapchain_extent.width,
                 self.data.swapchain_extent.height,
                 self.data.swapchain,
@@ -591,8 +591,9 @@ impl Engine {
                     ui.separator();
                 });
             let output = egui_integration.end_frame(window);
-            // TODO - Get pixels_per_point value from somewhere
-            let clipped_meshes = egui_integration.context().tessellate(output.shapes, 1.25);
+            let clipped_meshes = egui_integration
+                .context()
+                .tessellate(output.shapes, window.scale_factor() as f32);
             egui_integration.paint(
                 command_buffer,
                 image_index,
