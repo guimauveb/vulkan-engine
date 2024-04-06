@@ -31,7 +31,13 @@ use {
     minstant::Instant,
     model::load_model,
     pipeline::{create_descriptor_set_layout, create_pipeline, create_render_pass},
-    std::{ffi::CStr, mem::size_of, os::raw::c_void, ptr::copy_nonoverlapping, slice},
+    std::{
+        ffi::CStr,
+        mem::size_of,
+        os::raw::c_void,
+        ptr::{addr_of, copy_nonoverlapping},
+        slice,
+    },
     swapchain::{create_swapchain, create_swapchain_image_views},
     texture::{create_texture_image, create_texture_image_view, create_texture_sampler},
     vertex::Vertex,
@@ -54,7 +60,7 @@ use {
 };
 
 /// Whether validation layers should be enabled.
-const ENABLE_VALIDATION_LAYER: bool = true; // cfg!(debug_assertions);
+const ENABLE_VALIDATION_LAYER: bool = cfg!(debug_assertions);
 
 /// Names of the validation layer.
 const VALIDATION_LAYER: vk::ExtensionName =
@@ -475,8 +481,7 @@ impl Engine {
         let command_buffer = command_buffers[model_index];
 
         let model = Mat4::from_angle_y(Deg(-90.0)) * Mat4::from_angle_x(Deg(-90.0));
-        let model_bytes =
-            slice::from_raw_parts(&model as *const Mat4 as *const u8, size_of::<Mat4>());
+        let model_bytes = slice::from_raw_parts(addr_of!(model).cast::<u8>(), size_of::<Mat4>());
 
         let opacity_bytes = &100.0f32.to_ne_bytes()[..];
 
@@ -535,11 +540,11 @@ impl Engine {
     }
 
     /// Update egui integration.
-    fn update_gui(
+    unsafe fn update_gui(
         &mut self,
         command_buffer: vk::CommandBuffer,
         image_index: usize,
-        window: &mut Window,
+        window: &Window,
     ) -> Result<()> {
         if let (Some(egui_integration), Some(theme)) = (
             self.data.egui_integration.as_mut(),
@@ -606,11 +611,7 @@ impl Engine {
     }
 
     /// Update command buffer.
-    unsafe fn update_command_buffer(
-        &mut self,
-        image_index: usize,
-        window: &mut Window,
-    ) -> Result<()> {
+    unsafe fn update_command_buffer(&mut self, image_index: usize, window: &Window) -> Result<()> {
         // Reset
         let command_pool = self.data.command_pools[image_index];
         self.device
@@ -666,7 +667,7 @@ impl Engine {
     }
 
     /// Renders a frame for our Vulkan engine.
-    unsafe fn render(&mut self, window: &mut Window) -> Result<()> {
+    unsafe fn render(&mut self, window: &Window) -> Result<()> {
         let in_flight_fence = self.data.in_flight_fences[self.frame];
         self.device
             .wait_for_fences(&[in_flight_fence], true, u64::MAX)?;
@@ -772,13 +773,10 @@ impl Engine {
     unsafe fn destroy(&mut self) {
         self.device.device_wait_idle().unwrap();
         self.destroy_swapchain();
-
         self.data.egui_integration.as_mut().unwrap().destroy();
-
         for command_pool in self.data.command_pools.drain(..) {
             self.device.destroy_command_pool(command_pool, None);
         }
-
         for fence in self.data.in_flight_fences.drain(..) {
             self.device.destroy_fence(fence, None);
         }
@@ -788,28 +786,23 @@ impl Engine {
         for semaphore in self.data.image_available_semaphores.drain(..) {
             self.device.destroy_semaphore(semaphore, None);
         }
-
         self.device.free_memory(self.data.index_buffer_memory, None);
         self.device.destroy_buffer(self.data.index_buffer, None);
-
         self.device
             .free_memory(self.data.vertex_buffer_memory, None);
         self.device.destroy_buffer(self.data.vertex_buffer, None);
-
         self.device.destroy_sampler(self.data.texture_sampler, None);
         self.device
             .destroy_image_view(self.data.texture_image_view, None);
         self.device
             .free_memory(self.data.texture_image_memory, None);
         self.device.destroy_image(self.data.texture_image, None);
-
         self.device
             .destroy_command_pool(self.data.command_pool, None);
         self.device
             .destroy_descriptor_set_layout(self.data.descriptor_set_layout, None);
         self.device.destroy_device(None);
         self.instance.destroy_surface_khr(self.data.surface, None);
-
         if ENABLE_VALIDATION_LAYER {
             self.instance
                 .destroy_debug_utils_messenger_ext(self.data.messenger, None);
@@ -819,7 +812,7 @@ impl Engine {
     }
 }
 
-fn render(engine: &mut Engine, window: &mut Window) -> Result<()> {
+fn render(engine: &mut Engine, window: &Window) -> Result<()> {
     /// Limit the number of frames to 60 per second.
     const FRAME_CAP: f32 = 1.0 / 60.0;
 
@@ -839,7 +832,7 @@ fn main() -> Result<()> {
     pretty_env_logger::init();
     // Window
     let event_loop = EventLoop::new()?;
-    let mut window = WindowBuilder::new()
+    let window = WindowBuilder::new()
         .with_title("vulkan-engine")
         .with_inner_size(LogicalSize::new(1920, 1080))
         // TODO - Handle fullscreen
@@ -868,7 +861,7 @@ fn main() -> Result<()> {
                     WindowEvent::RedrawRequested
                         if !minimized && !destroyed && !target.exiting() =>
                     {
-                        if let Err(err) = render(&mut engine, &mut window) {
+                        if let Err(err) = render(&mut engine, &window) {
                             error!("Cannot render frame: {err}");
                             unsafe {
                                 engine.destroy();
@@ -897,7 +890,7 @@ fn main() -> Result<()> {
                         }
                     },
                     WindowEvent::CursorMoved { position, .. } => {
-                        engine.camera.on_mouse(position.cast())
+                        engine.camera.on_mouse(position.cast());
                     }
                     WindowEvent::Resized(size) => {
                         if size.width == 0 || size.height == 0 {

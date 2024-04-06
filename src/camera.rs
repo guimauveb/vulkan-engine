@@ -171,26 +171,26 @@ impl Camera {
     }
 
     pub fn on_render(&mut self) {
-        let mut shoud_update = false;
+        let mut should_update = false;
         if self.on_left_edge {
             self.yaw -= EDGE_STEP;
-            shoud_update = true;
+            should_update = true;
         } else if self.on_right_edge {
             self.yaw += EDGE_STEP;
-            shoud_update = true;
+            should_update = true;
         }
 
         if self.on_upper_edge {
             if self.pitch > -90.0 {
                 self.pitch -= EDGE_STEP;
-                shoud_update = true;
+                should_update = true;
             }
         } else if self.on_lower_edge && self.pitch < 90.0 {
             self.pitch += EDGE_STEP;
-            shoud_update = true
+            should_update = true;
         }
 
-        if shoud_update {
+        if should_update {
             self.update();
         }
     }

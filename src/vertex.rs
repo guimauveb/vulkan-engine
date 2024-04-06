@@ -27,7 +27,7 @@ impl Vertex {
     pub fn binding_description() -> impl vk::Cast<Target = vk::VertexInputBindingDescription> {
         vk::VertexInputBindingDescription::builder()
             .binding(0)
-            .stride(size_of::<Vertex>() as u32)
+            .stride(size_of::<Self>() as u32)
             .input_rate(vk::VertexInputRate::VERTEX)
     }
 
