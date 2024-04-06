@@ -117,7 +117,7 @@ pub unsafe fn create_descriptor_set_layout(device: &Device, data: &mut EngineDat
 }
 
 pub unsafe fn create_shader_module(device: &Device, bytecode: &[u8]) -> Result<vk::ShaderModule> {
-    let bytecode = Bytecode::new(bytecode).unwrap();
+    let bytecode = Bytecode::new(bytecode)?;
     let info = vk::ShaderModuleCreateInfo::builder()
         .code_size(bytecode.code_size())
         .code(bytecode.code());

@@ -1092,6 +1092,7 @@ impl Integration {
         Ok(())
     }
 
+    /// Destroy swapchain.
     unsafe fn destroy_swapchain(&mut self) {
         self.device.destroy_render_pass(self.render_pass, None);
         self.device.destroy_pipeline(self.pipeline, None);

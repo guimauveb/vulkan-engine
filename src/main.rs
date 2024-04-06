@@ -295,7 +295,7 @@ struct Engine {
 }
 
 impl Engine {
-    /// Creates our Vulkan engine.
+    /// Create a Vulkan engine.
     unsafe fn create(window: &Window) -> Result<Self> {
         let loader = LibloadingLoader::new(LIBRARY)?;
         let entry = Entry::new(loader).map_err(|err| anyhow!("{err}"))?;
@@ -392,6 +392,7 @@ impl Engine {
         })
     }
 
+    /// Recreate swapchain.
     unsafe fn recreate_swapchain(&mut self, window: &Window) -> Result<()> {
         self.device.device_wait_idle()?;
         self.destroy_swapchain();
@@ -428,6 +429,7 @@ impl Engine {
         Ok(())
     }
 
+    /// Update uniform buffer.
     unsafe fn update_uniform_buffer(&mut self, image_index: usize) -> Result<()> {
         self.camera.on_render();
         let view = self.camera.view();
@@ -463,6 +465,7 @@ impl Engine {
         Ok(())
     }
 
+    /// Update secondary command buffers.
     unsafe fn update_secondary_command_buffer(
         &mut self,
         image_index: usize,
@@ -666,7 +669,7 @@ impl Engine {
         Ok(())
     }
 
-    /// Renders a frame for our Vulkan engine.
+    /// Render a frame.
     unsafe fn render(&mut self, window: &Window) -> Result<()> {
         let in_flight_fence = self.data.in_flight_fences[self.frame];
         self.device
@@ -736,6 +739,7 @@ impl Engine {
         Ok(())
     }
 
+    /// Destroy swapchain.
     unsafe fn destroy_swapchain(&mut self) {
         self.device
             .destroy_descriptor_pool(self.data.descriptor_pool, None);
@@ -766,14 +770,16 @@ impl Engine {
         self.device.destroy_swapchain_khr(self.data.swapchain, None);
     }
 
-    /// Destroy vk objects.
+    /// Destroy the engine.
     ///
     /// # Unsafe
     /// This method releases vk objects memory that is not managed by Rust.
-    unsafe fn destroy(&mut self) {
-        self.device.device_wait_idle().unwrap();
+    unsafe fn destroy(&mut self) -> Result<()> {
+        self.device.device_wait_idle()?;
+        if let Some(gui) = self.data.egui_integration.as_mut() {
+            gui.destroy();
+        }
         self.destroy_swapchain();
-        self.data.egui_integration.as_mut().unwrap().destroy();
         for command_pool in self.data.command_pools.drain(..) {
             self.device.destroy_command_pool(command_pool, None);
         }
@@ -809,6 +815,8 @@ impl Engine {
         }
 
         self.instance.destroy_instance(None);
+
+        Ok(())
     }
 }
 
@@ -850,12 +858,9 @@ fn main() -> Result<()> {
                 window.request_redraw();
             }
             Event::WindowEvent { event, .. } => {
-                let _ = engine
-                    .data
-                    .egui_integration
-                    .as_mut()
-                    .unwrap()
-                    .handle_event(&window, &event);
+                if let Some(gui) = engine.data.egui_integration.as_mut() {
+                    _ = gui.handle_event(&window, &event);
+                }
 
                 match event {
                     WindowEvent::RedrawRequested
@@ -864,7 +869,9 @@ fn main() -> Result<()> {
                         if let Err(err) = render(&mut engine, &window) {
                             error!("Cannot render frame: {err}");
                             unsafe {
-                                engine.destroy();
+                                if let Err(err) = engine.destroy() {
+                                    error!("Error when destroying engine: {err}");
+                                }
                             }
                             destroyed = true;
                             target.exit();
@@ -877,7 +884,9 @@ fn main() -> Result<()> {
                         } => {
                             if key == NamedKey::Escape && !destroyed {
                                 unsafe {
-                                    engine.destroy();
+                                    if let Err(err) = engine.destroy() {
+                                        error!("Error when destroying engine: {err}");
+                                    }
                                 }
                                 destroyed = true;
                                 target.exit();
@@ -903,7 +912,9 @@ fn main() -> Result<()> {
                     WindowEvent::CloseRequested => {
                         if !destroyed {
                             unsafe {
-                                engine.destroy();
+                                if let Err(err) = engine.destroy() {
+                                    error!("Error when destroying engine: {err}");
+                                }
                             }
                             destroyed = true;
                             target.exit();
