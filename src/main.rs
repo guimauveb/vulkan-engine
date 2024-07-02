@@ -44,8 +44,9 @@ use {
     vulkanalia::{
         loader::{LibloadingLoader, LIBRARY},
         prelude::v1_0::{
-            vk,
-            vk::{ExtDebugUtilsExtension, Handle, KhrSurfaceExtension, KhrSwapchainExtension},
+            vk::{
+                self, ExtDebugUtilsExtension, Handle, KhrSurfaceExtension, KhrSwapchainExtension,
+            },
             Device, DeviceV1_0, Entry, EntryV1_0, HasBuilder, Instance, InstanceV1_0,
         },
         window as vk_window, Version,

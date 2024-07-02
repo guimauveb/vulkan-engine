@@ -8,7 +8,8 @@ use {
     bytemuck::bytes_of,
     egui::{
         epaint::{ahash::AHashMap, image::ImageDelta, Primitive},
-        Context, FontDefinitions, FullOutput, ImageData, Pos2, Style, TextureId, TexturesDelta,
+        ClippedPrimitive, Context, FontDefinitions, FullOutput, ImageData, Pos2, Style, TextureId,
+        TexturesDelta,
     },
     egui_winit::{
         winit::{event::WindowEvent, window::Window},
@@ -867,7 +868,7 @@ impl Integration {
         &mut self,
         command_buffer: vk::CommandBuffer,
         image_index: usize,
-        clipped_meshes: Vec<egui::ClippedPrimitive>,
+        clipped_meshes: Vec<ClippedPrimitive>,
         textures_delta: TexturesDelta,
     ) -> Result<()> {
         for (id, image_delta) in textures_delta.set {
@@ -959,7 +960,7 @@ impl Integration {
         );
 
         let (mut vertex_base, mut index_base) = (0, 0);
-        for egui::ClippedPrimitive {
+        for ClippedPrimitive {
             clip_rect,
             primitive,
         } in clipped_meshes
@@ -999,11 +1000,11 @@ impl Integration {
                     &[],
                 );
             }
-            let v_slice = &mesh.vertices;
+            let v_slice = &mesh.vertices[..];
             let v_size = size_of_val(&v_slice[0]);
             let v_copy_size = v_slice.len() * v_size;
 
-            let i_slice = &mesh.indices;
+            let i_slice = &mesh.indices[..];
             let i_size = size_of_val(&i_slice[0]);
             let i_copy_size = i_slice.len() * i_size;
 

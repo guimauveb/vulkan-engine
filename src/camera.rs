@@ -8,7 +8,7 @@ use {
 };
 
 /// Camera speed
-const SPEED: f32 = 0.05;
+const SPEED: f32 = 0.1;
 /// Move the camera `EDGE_STEP`s towards the proper direction when the mouse is resting on one of the edges of the window.
 const EDGE_STEP: f32 = 1.0;
 /// Set the borders of the window to be `MARGIN` (pixels?) away from the actual borders.
@@ -55,10 +55,6 @@ impl Camera {
         }
     }
 
-    fn update_view(&mut self) {
-        self.view = Mat4::look_at_rh(self.eye, self.eye + self.target, self.up);
-    }
-
     fn update(&mut self) {
         // TODO - Try rotating using rotations matrices and quaternions
         let (yaw_cos, yaw_sin, pitch_cos, pitch_sin) = (
@@ -69,7 +65,7 @@ impl Camera {
         );
         let direction = vec3(yaw_cos * pitch_cos, pitch_sin, yaw_sin * pitch_cos);
         self.target = direction.normalize();
-        self.update_view();
+        self.view = Mat4::look_at_rh(self.eye, self.eye + self.target, self.up);
     }
 
     pub fn new(eye: Point3, target: Vec3, up: Vec3, width: u32, height: u32) -> Self {
@@ -124,9 +120,16 @@ impl Camera {
                     self.eye += right;
                     self.update();
                 }
+                "q" => {
+                    self.eye += self.up * SPEED;
+                    self.update();
+                }
+                "e" => {
+                    self.eye -= self.up * SPEED;
+                    self.update();
+                }
                 _ => {}
             },
-
             // TODO - Handle more inputs to change camera behaviour (speed, etc)
             _ => {}
         }
