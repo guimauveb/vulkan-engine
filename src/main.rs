@@ -69,10 +69,7 @@ const VALIDATION_LAYER: vk::ExtensionName =
     vk::ExtensionName::from_bytes(b"VK_LAYER_KHRONOS_validation");
 
 /// Required device extensions.
-const DEVICE_EXTENSIONS: &[vk::ExtensionName] = &[
-    vk::KHR_SWAPCHAIN_EXTENSION.name,
-    vk::KHR_BUFFER_DEVICE_ADDRESS_EXTENSION.name,
-];
+const DEVICE_EXTENSIONS: &[vk::ExtensionName] = &[vk::KHR_SWAPCHAIN_EXTENSION.name];
 
 /// Vulkan SDK version that started requiring the portability subset extension for macOS.
 const PORTABILITY_MACOS_VERSION: Version = Version::new(1, 3, 216);
