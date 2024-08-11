@@ -60,6 +60,7 @@ impl PartialEq for Vertex {
         self.position == other.position
             && self.color == other.color
             && self.tex_coord == other.tex_coord
+            && self.normal == other.normal
     }
 }
 
