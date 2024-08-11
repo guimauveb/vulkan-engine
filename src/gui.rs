@@ -1,6 +1,6 @@
 use {
     super::{
-        buffer::{create_buffer, create_index_buffer, create_vertex_buffer, BufferAllocation},
+        buffer::{create_index_buffer, create_vertex_buffer, BufferAllocation},
         command_buffers::create_command_pool,
         image::{create_image, create_image_view},
     },
@@ -22,7 +22,7 @@ use {
         ptr::copy_nonoverlapping,
     },
     vulkanalia::{
-        prelude::v1_0::{vk, Device, DeviceV1_0, Handle, HasBuilder, Instance},
+        prelude::v1_3::{vk, Device, DeviceV1_0, Handle, HasBuilder, Instance},
         vk::KhrSwapchainExtension,
     },
 };
@@ -567,7 +567,7 @@ impl Integration {
         // TODO: Check if we can have a method like create_vertex/index_buffer for any "staged" buffer copy (source -> staging -> destination)
         let size = data.len() as vk::DeviceSize;
         let staging_buffer = {
-            create_buffer(
+            BufferAllocation::new(
                 &self.instance,
                 &self.device,
                 self.physical_device,
@@ -577,9 +577,12 @@ impl Integration {
             )?
         };
         // Copy to staging buffer
-        let memory =
-            self.device
-                .map_memory(staging_buffer.memory, 0, size, vk::MemoryMapFlags::empty())?;
+        let memory = self.device.map_memory(
+            staging_buffer.memory(),
+            0,
+            size,
+            vk::MemoryMapFlags::empty(),
+        )?;
         copy_nonoverlapping(data.as_ptr(), memory.cast(), data.len());
 
         let (texture_image, texture_image_memory) = create_image(
@@ -651,7 +654,7 @@ impl Integration {
             });
         self.device.cmd_copy_buffer_to_image(
             cmd_buff,
-            staging_buffer.buffer,
+            staging_buffer.buffer(),
             texture_image,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             &[region],
@@ -848,8 +851,7 @@ impl Integration {
         }
 
         // Cleanup
-        self.device.destroy_buffer(staging_buffer.buffer, None);
-        self.device.free_memory(staging_buffer.memory, None);
+        staging_buffer.destroy(&self.device);
         self.device.destroy_command_pool(cmd_pool, None);
         self.device.destroy_fence(cmd_buff_fence, None);
 
@@ -871,7 +873,7 @@ impl Integration {
         let mut vertex_buffer_ptr = self
             .device
             .map_memory(
-                self.vertex_buffers[image_index].memory,
+                self.vertex_buffers[image_index].memory(),
                 0,
                 Self::vertex_buffer_size(),
                 vk::MemoryMapFlags::empty(),
@@ -882,7 +884,7 @@ impl Integration {
         let mut index_buffer_ptr = self
             .device
             .map_memory(
-                self.index_buffers[image_index].memory,
+                self.index_buffers[image_index].memory(),
                 0,
                 Self::index_buffer_size(),
                 vk::MemoryMapFlags::empty(),
@@ -916,12 +918,12 @@ impl Integration {
         self.device.cmd_bind_vertex_buffers(
             command_buffer,
             0,
-            &[self.vertex_buffers[image_index].buffer],
+            &[self.vertex_buffers[image_index].buffer()],
             &[0],
         );
         self.device.cmd_bind_index_buffer(
             command_buffer,
-            self.index_buffers[image_index].buffer,
+            self.index_buffers[image_index].buffer(),
             0,
             vk::IndexType::UINT32,
         );
@@ -1079,9 +1081,9 @@ impl Integration {
         // End render pass
         self.device.cmd_end_render_pass(command_buffer);
         self.device
-            .unmap_memory(self.vertex_buffers[image_index].memory);
+            .unmap_memory(self.vertex_buffers[image_index].memory());
         self.device
-            .unmap_memory(self.index_buffers[image_index].memory);
+            .unmap_memory(self.index_buffers[image_index].memory());
 
         Ok(())
     }
@@ -1138,12 +1140,10 @@ impl Integration {
             self.device.destroy_command_pool(command_pool, None);
         }
         for buffer in self.index_buffers.drain(..) {
-            self.device.destroy_buffer(buffer.buffer, None);
-            self.device.free_memory(buffer.memory, None);
+            buffer.destroy(&self.device);
         }
         for buffer in self.vertex_buffers.drain(..) {
-            self.device.destroy_buffer(buffer.buffer, None);
-            self.device.free_memory(buffer.memory, None);
+            buffer.destroy(&self.device);
         }
         self.device.destroy_sampler(self.sampler, None);
         self.device

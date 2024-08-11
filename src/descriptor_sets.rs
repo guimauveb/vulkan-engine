@@ -2,7 +2,7 @@ use {
     super::{buffer::UniformBufferObject, EngineData},
     anyhow::Result,
     std::mem::size_of,
-    vulkanalia::prelude::v1_0::{vk, Device, DeviceV1_0, HasBuilder},
+    vulkanalia::prelude::v1_3::{vk, Device, DeviceV1_0, HasBuilder},
 };
 
 pub unsafe fn create_descriptor_sets(device: &Device, data: &mut EngineData) -> Result<()> {
@@ -14,7 +14,7 @@ pub unsafe fn create_descriptor_sets(device: &Device, data: &mut EngineData) -> 
 
     for i in 0..data.swapchain_images.len() {
         let info = vk::DescriptorBufferInfo::builder()
-            .buffer(data.uniform_buffers[i].buffer)
+            .buffer(data.uniform_buffers[i].buffer())
             .offset(0)
             // Could use vk::WHOLE_SIZE here
             .range(size_of::<UniformBufferObject>() as vk::DeviceSize);

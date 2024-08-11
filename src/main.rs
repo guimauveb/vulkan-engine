@@ -44,7 +44,7 @@ use {
     vertex::Vertex,
     vulkanalia::{
         loader::{LibloadingLoader, LIBRARY},
-        prelude::v1_2::{
+        prelude::v1_3::{
             vk::{
                 self, ExtDebugUtilsExtension, Handle, KhrSurfaceExtension, KhrSwapchainExtension,
             },
@@ -446,14 +446,14 @@ impl Engine {
         let ubo = UniformBufferObject { view, proj };
 
         let memory = self.device.map_memory(
-            self.data.uniform_buffers[image_index].memory,
+            self.data.uniform_buffers[image_index].memory(),
             0,
             size_of::<UniformBufferObject>() as vk::DeviceSize,
             vk::MemoryMapFlags::empty(),
         )?;
         copy_nonoverlapping(&ubo, memory.cast(), 1);
         self.device
-            .unmap_memory(self.data.uniform_buffers[image_index].memory);
+            .unmap_memory(self.data.uniform_buffers[image_index].memory());
 
         Ok(())
     }
@@ -500,12 +500,12 @@ impl Engine {
         self.device.cmd_bind_vertex_buffers(
             command_buffer,
             0,
-            &[self.data.vertex_buffer.buffer],
+            &[self.data.vertex_buffer.buffer()],
             &[0],
         );
         self.device.cmd_bind_index_buffer(
             command_buffer,
-            self.data.index_buffer.buffer,
+            self.data.index_buffer.buffer(),
             0,
             vk::IndexType::UINT32,
         );
@@ -762,8 +762,7 @@ impl Engine {
         self.device
             .destroy_descriptor_pool(self.data.descriptor_pool, None);
         for buffer in self.data.uniform_buffers.drain(..) {
-            self.device.free_memory(buffer.memory, None);
-            self.device.destroy_buffer(buffer.buffer, None);
+            buffer.destroy(&self.device);
         }
         self.device
             .destroy_image_view(self.data.color_image_view, None);
@@ -808,13 +807,8 @@ impl Engine {
         for semaphore in self.data.image_available_semaphores.drain(..) {
             self.device.destroy_semaphore(semaphore, None);
         }
-        self.device.free_memory(self.data.index_buffer.memory, None);
-        self.device
-            .destroy_buffer(self.data.index_buffer.buffer, None);
-        self.device
-            .free_memory(self.data.vertex_buffer.memory, None);
-        self.device
-            .destroy_buffer(self.data.vertex_buffer.buffer, None);
+        self.data.index_buffer.destroy(&self.device);
+        self.data.vertex_buffer.destroy(&self.device);
         self.device.destroy_sampler(self.data.texture_sampler, None);
         self.device
             .destroy_image_view(self.data.texture_image_view, None);

@@ -2,9 +2,8 @@ use {
     super::{vertex::Vertex, EngineData, Mat4},
     anyhow::{anyhow, Result},
     std::{mem::size_of, ptr::copy_nonoverlapping},
-    vulkanalia::{
-        prelude::v1_0::{vk, Device, DeviceV1_0, Handle, HasBuilder, Instance, InstanceV1_0},
-        vk::KhrBufferDeviceAddressExtension,
+    vulkanalia::prelude::v1_3::{
+        vk, Device, DeviceV1_0, DeviceV1_2, Handle, HasBuilder, Instance, InstanceV1_0,
     },
 };
 
@@ -60,54 +59,73 @@ pub unsafe fn get_memory_type_index(
 
 #[derive(Default)]
 pub struct BufferAllocation {
-    pub buffer: vk::Buffer,
-    pub memory: vk::DeviceMemory,
-    pub _address: vk::DeviceAddress,
+    buffer: vk::Buffer,
+    memory: vk::DeviceMemory,
+    address: vk::DeviceAddress,
 }
 
 impl BufferAllocation {
-    pub fn new(buffer: vk::Buffer, memory: vk::DeviceMemory, address: vk::DeviceAddress) -> Self {
-        Self {
+    /// Constructor
+    pub unsafe fn new(
+        instance: &Instance,
+        device: &Device,
+        physical_device: vk::PhysicalDevice,
+        size: vk::DeviceSize,
+        usage: vk::BufferUsageFlags,
+        properties: vk::MemoryPropertyFlags,
+    ) -> Result<Self> {
+        let buffer_info = vk::BufferCreateInfo::builder()
+            .size(size)
+            .usage(usage | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS)
+            .sharing_mode(vk::SharingMode::EXCLUSIVE);
+        let buffer = device.create_buffer(&buffer_info, None)?;
+        let requirements = device.get_buffer_memory_requirements(buffer);
+        let mut flags = vk::MemoryAllocateFlagsInfo::builder()
+            .flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS)
+            .build();
+        let memory_info = vk::MemoryAllocateInfo::builder()
+            .allocation_size(requirements.size)
+            .memory_type_index(get_memory_type_index(
+                instance,
+                physical_device,
+                properties,
+                requirements,
+            )?)
+            .push_next(&mut flags);
+        let memory = device.allocate_memory(&memory_info, None)?;
+        device.bind_buffer_memory(buffer, memory, 0)?;
+
+        let info = vk::BufferDeviceAddressInfoKHR::builder().buffer(buffer);
+        let address = device.get_buffer_device_address(&info);
+
+        Ok(Self {
             buffer,
             memory,
-            _address: address,
-        }
+            address,
+        })
     }
-}
 
-pub unsafe fn create_buffer(
-    instance: &Instance,
-    device: &Device,
-    physical_device: vk::PhysicalDevice,
-    size: vk::DeviceSize,
-    usage: vk::BufferUsageFlags,
-    properties: vk::MemoryPropertyFlags,
-) -> Result<BufferAllocation> {
-    let buffer_info = vk::BufferCreateInfo::builder()
-        .size(size)
-        .usage(usage | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS)
-        .sharing_mode(vk::SharingMode::EXCLUSIVE);
-    let buffer = device.create_buffer(&buffer_info, None)?;
-    let requirements = device.get_buffer_memory_requirements(buffer);
-    let mut flags = vk::MemoryAllocateFlagsInfo::builder()
-        .flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS)
-        .build();
-    let memory_info = vk::MemoryAllocateInfo::builder()
-        .allocation_size(requirements.size)
-        .memory_type_index(get_memory_type_index(
-            instance,
-            physical_device,
-            properties,
-            requirements,
-        )?)
-        .push_next(&mut flags);
-    let buffer_memory = device.allocate_memory(&memory_info, None)?;
-    device.bind_buffer_memory(buffer, buffer_memory, 0)?;
+    #[inline]
+    pub fn buffer(&self) -> vk::Buffer {
+        self.buffer
+    }
 
-    let info = vk::BufferDeviceAddressInfoKHR::builder().buffer(buffer);
-    let address = device.get_buffer_device_address_khr(&info);
+    #[inline]
+    pub fn memory(&self) -> vk::DeviceMemory {
+        self.memory
+    }
 
-    Ok(BufferAllocation::new(buffer, buffer_memory, address))
+    #[inline]
+    pub fn address(&self) -> vk::DeviceAddress {
+        self.address
+    }
+
+    /// Destroy the buffer and release the associated memory.
+    #[inline]
+    pub unsafe fn destroy(&self, device: &Device) {
+        device.destroy_buffer(self.buffer, None);
+        device.free_memory(self.memory, None)
+    }
 }
 
 pub unsafe fn copy_buffer(
@@ -136,7 +154,7 @@ pub unsafe fn create_vertex_buffer(
     vertices: &[Vertex],
     size: vk::DeviceSize,
 ) -> Result<BufferAllocation> {
-    let staging_buffer = create_buffer(
+    let staging_buffer = BufferAllocation::new(
         instance,
         device,
         physical_device,
@@ -151,7 +169,7 @@ pub unsafe fn create_vertex_buffer(
     device.unmap_memory(staging_buffer.memory);
 
     // Create vertex buffer
-    let vertex_buffer = create_buffer(
+    let vertex_buffer = BufferAllocation::new(
         instance,
         device,
         physical_device,
@@ -172,8 +190,7 @@ pub unsafe fn create_vertex_buffer(
     )?;
 
     // Cleanup
-    device.destroy_buffer(staging_buffer.buffer, None);
-    device.free_memory(staging_buffer.memory, None);
+    staging_buffer.destroy(device);
 
     Ok(vertex_buffer)
 }
@@ -188,7 +205,7 @@ pub unsafe fn create_index_buffer(
     indices: &[u32],
     size: vk::DeviceSize,
 ) -> Result<BufferAllocation> {
-    let staging_buffer = create_buffer(
+    let staging_buffer = BufferAllocation::new(
         instance,
         device,
         physical_device,
@@ -201,7 +218,7 @@ pub unsafe fn create_index_buffer(
     copy_nonoverlapping(indices.as_ptr(), memory.cast(), indices.len());
     device.unmap_memory(staging_buffer.memory);
 
-    let index_buffer = create_buffer(
+    let index_buffer = BufferAllocation::new(
         instance,
         device,
         physical_device,
@@ -221,8 +238,7 @@ pub unsafe fn create_index_buffer(
     )?;
 
     // Cleanup
-    device.destroy_buffer(staging_buffer.buffer, None);
-    device.free_memory(staging_buffer.memory, None);
+    staging_buffer.destroy(device);
 
     Ok(index_buffer)
 }
@@ -245,7 +261,7 @@ pub unsafe fn create_uniform_buffers(
     data.uniform_buffers.clear();
 
     for _ in 0..data.swapchain_images.len() {
-        let uniform_buffer = create_buffer(
+        let uniform_buffer = BufferAllocation::new(
             instance,
             device,
             data.physical_device,

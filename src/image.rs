@@ -4,7 +4,7 @@ use {
         EngineData,
     },
     anyhow::{anyhow, Result},
-    vulkanalia::prelude::v1_0::{vk, Device, DeviceV1_0, HasBuilder, Instance, InstanceV1_0},
+    vulkanalia::prelude::v1_3::{vk, Device, DeviceV1_0, HasBuilder, Instance, InstanceV1_0},
 };
 
 pub unsafe fn copy_buffer_to_image(

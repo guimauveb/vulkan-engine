@@ -7,7 +7,7 @@ use {
     hashbrown::HashSet,
     log::{info, warn},
     thiserror::Error as ThisError,
-    vulkanalia::prelude::v1_0::{
+    vulkanalia::prelude::v1_3::{
         vk::{self, KhrSurfaceExtension},
         Device, DeviceV1_0, Entry, HasBuilder, Instance, InstanceV1_0,
     },

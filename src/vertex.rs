@@ -4,7 +4,7 @@ use {
         hash::{Hash, Hasher},
         mem::size_of,
     },
-    vulkanalia::prelude::v1_0::{vk, HasBuilder},
+    vulkanalia::prelude::v1_3::{vk, HasBuilder},
 };
 
 #[repr(C)]

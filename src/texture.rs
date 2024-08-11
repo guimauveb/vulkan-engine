@@ -1,12 +1,12 @@
 use {
     super::{
-        buffer::{begin_single_time_commands, create_buffer, end_single_time_commands},
+        buffer::{begin_single_time_commands, end_single_time_commands, BufferAllocation},
         image::{copy_buffer_to_image, create_image, create_image_view, transition_image_layout},
         EngineData,
     },
     anyhow::{anyhow, Result},
     std::{fs::File, ptr::copy_nonoverlapping},
-    vulkanalia::prelude::v1_0::{vk, Device, DeviceV1_0, HasBuilder, Instance, InstanceV1_0},
+    vulkanalia::prelude::v1_3::{vk, Device, DeviceV1_0, HasBuilder, Instance, InstanceV1_0},
 };
 
 // It should be noted that it is uncommon in practice to generate the mipmap levels at runtime anyway.
@@ -180,7 +180,7 @@ pub unsafe fn create_texture_image(
 
     let size = size as vk::DeviceSize;
     // Create staging buffer
-    let staging_buffer = create_buffer(
+    let staging_buffer = BufferAllocation::new(
         instance,
         device,
         data.physical_device,
@@ -190,9 +190,14 @@ pub unsafe fn create_texture_image(
     )?;
 
     // Copy to staging buffer
-    let memory = device.map_memory(staging_buffer.memory, 0, size, vk::MemoryMapFlags::empty())?;
+    let memory = device.map_memory(
+        staging_buffer.memory(),
+        0,
+        size,
+        vk::MemoryMapFlags::empty(),
+    )?;
     copy_nonoverlapping(pixels.as_ptr(), memory.cast(), pixels.len());
-    device.unmap_memory(staging_buffer.memory);
+    device.unmap_memory(staging_buffer.memory());
 
     data.mip_levels = (width.max(height) as f32).log2().floor() as u32 + 1;
 
@@ -227,14 +232,13 @@ pub unsafe fn create_texture_image(
     copy_buffer_to_image(
         device,
         data,
-        staging_buffer.buffer,
+        staging_buffer.buffer(),
         data.texture_image,
         width,
         height,
     )?;
 
-    device.destroy_buffer(staging_buffer.buffer, None);
-    device.free_memory(staging_buffer.memory, None);
+    staging_buffer.destroy(device);
 
     generate_mipmaps(
         instance,
