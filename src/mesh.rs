@@ -164,7 +164,6 @@ pub unsafe fn load_gltf_meshes(
                             vec2(1., 1.),
                             vec3(1., 1., 1.),
                         );
-                        // NOTE -
                         match vertices.get_mut(initial_vtx + index) {
                             Some(entry) => {
                                 *entry = vertex;

@@ -85,10 +85,13 @@ pub unsafe fn create_buffer(
 ) -> Result<BufferAllocation> {
     let buffer_info = vk::BufferCreateInfo::builder()
         .size(size)
-        .usage(usage)
+        .usage(usage | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS)
         .sharing_mode(vk::SharingMode::EXCLUSIVE);
     let buffer = device.create_buffer(&buffer_info, None)?;
     let requirements = device.get_buffer_memory_requirements(buffer);
+    let mut flags = vk::MemoryAllocateFlagsInfo::builder()
+        .flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS)
+        .build();
     let memory_info = vk::MemoryAllocateInfo::builder()
         .allocation_size(requirements.size)
         .memory_type_index(get_memory_type_index(
@@ -96,11 +99,11 @@ pub unsafe fn create_buffer(
             physical_device,
             properties,
             requirements,
-        )?);
+        )?)
+        .push_next(&mut flags);
     let buffer_memory = device.allocate_memory(&memory_info, None)?;
     device.bind_buffer_memory(buffer, buffer_memory, 0)?;
 
-    // FIXME: ERROR vulkan_engine         > (VALIDATION) Validation Error: [ VUID-VkBufferDeviceAddressInfo-buffer-02601 ] | MessageID = 0x97c889fd | vkGetBufferDeviceAddressKHR(): pInfo->buffer (VkBuffer 0x44349c0000000060[]) was created with VK_BUFFER_USAGE_2_TRANSFER_DST_BIT_KHR|VK_BUFFER_USAGE_2_VERTEX_BUFFER_BIT_KHR but requires VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT. The Vulkan spec states: buffer must have been created with VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT (https://www.khronos.org/registry/vulkan/specs/1.3-extensions/html/vkspec.html#VUID-VkBufferDeviceAddressInfo-buffer-02601)
     let info = vk::BufferDeviceAddressInfoKHR::builder().buffer(buffer);
     let address = device.get_buffer_device_address_khr(&info);
 
