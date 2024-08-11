@@ -190,14 +190,9 @@ pub unsafe fn create_texture_image(
     )?;
 
     // Copy to staging buffer
-    let memory = device.map_memory(
-        staging_buffer.memory(),
-        0,
-        size,
-        vk::MemoryMapFlags::empty(),
-    )?;
+    let memory = device.map_memory(staging_buffer.memory, 0, size, vk::MemoryMapFlags::empty())?;
     copy_nonoverlapping(pixels.as_ptr(), memory.cast(), pixels.len());
-    device.unmap_memory(staging_buffer.memory());
+    device.unmap_memory(staging_buffer.memory);
 
     data.mip_levels = (width.max(height) as f32).log2().floor() as u32 + 1;
 
@@ -232,7 +227,7 @@ pub unsafe fn create_texture_image(
     copy_buffer_to_image(
         device,
         data,
-        staging_buffer.buffer(),
+        staging_buffer.buffer,
         data.texture_image,
         width,
         height,

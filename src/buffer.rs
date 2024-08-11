@@ -59,9 +59,9 @@ pub unsafe fn get_memory_type_index(
 
 #[derive(Default)]
 pub struct BufferAllocation {
-    buffer: vk::Buffer,
-    memory: vk::DeviceMemory,
-    address: vk::DeviceAddress,
+    pub buffer: vk::Buffer,
+    pub memory: vk::DeviceMemory,
+    pub address: vk::DeviceAddress,
 }
 
 impl BufferAllocation {
@@ -103,21 +103,6 @@ impl BufferAllocation {
             memory,
             address,
         })
-    }
-
-    #[inline]
-    pub fn buffer(&self) -> vk::Buffer {
-        self.buffer
-    }
-
-    #[inline]
-    pub fn memory(&self) -> vk::DeviceMemory {
-        self.memory
-    }
-
-    #[inline]
-    pub fn address(&self) -> vk::DeviceAddress {
-        self.address
     }
 
     /// Destroy the buffer and release the associated memory.

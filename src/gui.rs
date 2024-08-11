@@ -577,12 +577,9 @@ impl Integration {
             )?
         };
         // Copy to staging buffer
-        let memory = self.device.map_memory(
-            staging_buffer.memory(),
-            0,
-            size,
-            vk::MemoryMapFlags::empty(),
-        )?;
+        let memory =
+            self.device
+                .map_memory(staging_buffer.memory, 0, size, vk::MemoryMapFlags::empty())?;
         copy_nonoverlapping(data.as_ptr(), memory.cast(), data.len());
 
         let (texture_image, texture_image_memory) = create_image(
@@ -654,7 +651,7 @@ impl Integration {
             });
         self.device.cmd_copy_buffer_to_image(
             cmd_buff,
-            staging_buffer.buffer(),
+            staging_buffer.buffer,
             texture_image,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             &[region],
@@ -873,7 +870,7 @@ impl Integration {
         let mut vertex_buffer_ptr = self
             .device
             .map_memory(
-                self.vertex_buffers[image_index].memory(),
+                self.vertex_buffers[image_index].memory,
                 0,
                 Self::vertex_buffer_size(),
                 vk::MemoryMapFlags::empty(),
@@ -884,7 +881,7 @@ impl Integration {
         let mut index_buffer_ptr = self
             .device
             .map_memory(
-                self.index_buffers[image_index].memory(),
+                self.index_buffers[image_index].memory,
                 0,
                 Self::index_buffer_size(),
                 vk::MemoryMapFlags::empty(),
@@ -918,12 +915,12 @@ impl Integration {
         self.device.cmd_bind_vertex_buffers(
             command_buffer,
             0,
-            &[self.vertex_buffers[image_index].buffer()],
+            &[self.vertex_buffers[image_index].buffer],
             &[0],
         );
         self.device.cmd_bind_index_buffer(
             command_buffer,
-            self.index_buffers[image_index].buffer(),
+            self.index_buffers[image_index].buffer,
             0,
             vk::IndexType::UINT32,
         );
@@ -1081,9 +1078,9 @@ impl Integration {
         // End render pass
         self.device.cmd_end_render_pass(command_buffer);
         self.device
-            .unmap_memory(self.vertex_buffers[image_index].memory());
+            .unmap_memory(self.vertex_buffers[image_index].memory);
         self.device
-            .unmap_memory(self.index_buffers[image_index].memory());
+            .unmap_memory(self.index_buffers[image_index].memory);
 
         Ok(())
     }

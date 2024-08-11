@@ -17,7 +17,7 @@ winit = "0.29"
 egui = "0.25"
 egui-winit = { version = "0.25", default-features = false, features = ["wayland"] }
 raw-window-handle = "0.5"
-vulkanalia = { version = "0.23", features = ["libloading", "provisional", "window"] }
+vulkanalia = { version = "0.24", features = ["libloading", "provisional", "window"] }
 tobj = { version = "3", features = ["log"] }
 gltf = "1.4"
 

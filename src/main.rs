@@ -446,14 +446,14 @@ impl Engine {
         let ubo = UniformBufferObject { view, proj };
 
         let memory = self.device.map_memory(
-            self.data.uniform_buffers[image_index].memory(),
+            self.data.uniform_buffers[image_index].memory,
             0,
             size_of::<UniformBufferObject>() as vk::DeviceSize,
             vk::MemoryMapFlags::empty(),
         )?;
         copy_nonoverlapping(&ubo, memory.cast(), 1);
         self.device
-            .unmap_memory(self.data.uniform_buffers[image_index].memory());
+            .unmap_memory(self.data.uniform_buffers[image_index].memory);
 
         Ok(())
     }
@@ -500,12 +500,12 @@ impl Engine {
         self.device.cmd_bind_vertex_buffers(
             command_buffer,
             0,
-            &[self.data.vertex_buffer.buffer()],
+            &[self.data.vertex_buffer.buffer],
             &[0],
         );
         self.device.cmd_bind_index_buffer(
             command_buffer,
-            self.data.index_buffer.buffer(),
+            self.data.index_buffer.buffer,
             0,
             vk::IndexType::UINT32,
         );
