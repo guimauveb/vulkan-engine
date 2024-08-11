@@ -14,7 +14,7 @@ const EDGE_STEP: f32 = 1.0;
 /// Set the borders of the window to be `MARGIN` (pixels?) away from the actual borders.
 const MARGIN: f32 = 1.0;
 
-// TODO - Implement different types of cameras (FPS, TPS) that all implement a Camera trait
+// TODO: Implement different types of cameras (FPS, TPS) that all implement a Camera trait
 #[derive(Debug, Clone, Copy)]
 pub struct Camera {
     eye: Point3,
@@ -56,7 +56,7 @@ impl Camera {
     }
 
     fn update(&mut self) {
-        // TODO - Try rotating using rotations matrices and quaternions
+        // TODO: Try rotating using rotations matrices and quaternions
         let (yaw_cos, yaw_sin, pitch_cos, pitch_sin) = (
             Deg(self.yaw).cos(),
             Deg(self.yaw).sin(),
@@ -130,7 +130,7 @@ impl Camera {
                 }
                 _ => {}
             },
-            // TODO - Handle more inputs to change camera behaviour (speed, etc)
+            // TODO: Handle more inputs to change camera behaviour (speed, etc)
             _ => {}
         }
     }

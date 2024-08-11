@@ -2,8 +2,9 @@ use {
     super::{vertex::Vertex, EngineData, Mat4},
     anyhow::{anyhow, Result},
     std::{mem::size_of, ptr::copy_nonoverlapping},
-    vulkanalia::prelude::v1_0::{
-        vk, Device, DeviceV1_0, Handle, HasBuilder, Instance, InstanceV1_0,
+    vulkanalia::{
+        prelude::v1_0::{vk, Device, DeviceV1_0, Handle, HasBuilder, Instance, InstanceV1_0},
+        vk::KhrBufferDeviceAddressExtension,
     },
 };
 
@@ -57,6 +58,23 @@ pub unsafe fn get_memory_type_index(
         .ok_or_else(|| anyhow!("Failed to find suitable memory type"))
 }
 
+#[derive(Default)]
+pub struct BufferAllocation {
+    pub buffer: vk::Buffer,
+    pub memory: vk::DeviceMemory,
+    pub _address: vk::DeviceAddress,
+}
+
+impl BufferAllocation {
+    pub fn new(buffer: vk::Buffer, memory: vk::DeviceMemory, address: vk::DeviceAddress) -> Self {
+        Self {
+            buffer,
+            memory,
+            _address: address,
+        }
+    }
+}
+
 pub unsafe fn create_buffer(
     instance: &Instance,
     device: &Device,
@@ -64,7 +82,7 @@ pub unsafe fn create_buffer(
     size: vk::DeviceSize,
     usage: vk::BufferUsageFlags,
     properties: vk::MemoryPropertyFlags,
-) -> Result<(vk::Buffer, vk::DeviceMemory)> {
+) -> Result<BufferAllocation> {
     let buffer_info = vk::BufferCreateInfo::builder()
         .size(size)
         .usage(usage)
@@ -82,7 +100,11 @@ pub unsafe fn create_buffer(
     let buffer_memory = device.allocate_memory(&memory_info, None)?;
     device.bind_buffer_memory(buffer, buffer_memory, 0)?;
 
-    Ok((buffer, buffer_memory))
+    // FIXME: ERROR vulkan_engine         > (VALIDATION) Validation Error: [ VUID-VkBufferDeviceAddressInfo-buffer-02601 ] | MessageID = 0x97c889fd | vkGetBufferDeviceAddressKHR(): pInfo->buffer (VkBuffer 0x44349c0000000060[]) was created with VK_BUFFER_USAGE_2_TRANSFER_DST_BIT_KHR|VK_BUFFER_USAGE_2_VERTEX_BUFFER_BIT_KHR but requires VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT. The Vulkan spec states: buffer must have been created with VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT (https://www.khronos.org/registry/vulkan/specs/1.3-extensions/html/vkspec.html#VUID-VkBufferDeviceAddressInfo-buffer-02601)
+    let info = vk::BufferDeviceAddressInfoKHR::builder().buffer(buffer);
+    let address = device.get_buffer_device_address_khr(&info);
+
+    Ok(BufferAllocation::new(buffer, buffer_memory, address))
 }
 
 pub unsafe fn copy_buffer(
@@ -101,7 +123,7 @@ pub unsafe fn copy_buffer(
     Ok(())
 }
 
-// TODO - Check if we can have a method for any "staged" buffer copy (source -> staging -> destination)
+// TODO: Check if we can have a method for any "staged" buffer copy (source -> staging -> destination)
 pub unsafe fn create_vertex_buffer(
     instance: &Instance,
     device: &Device,
@@ -110,8 +132,8 @@ pub unsafe fn create_vertex_buffer(
     command_pool: vk::CommandPool,
     vertices: &[Vertex],
     size: vk::DeviceSize,
-) -> Result<(vk::Buffer, vk::DeviceMemory)> {
-    let (staging_buffer, staging_buffer_memory) = create_buffer(
+) -> Result<BufferAllocation> {
+    let staging_buffer = create_buffer(
         instance,
         device,
         physical_device,
@@ -121,18 +143,18 @@ pub unsafe fn create_vertex_buffer(
     )?;
 
     // Copy to staging buffer
-    let memory = device.map_memory(staging_buffer_memory, 0, size, vk::MemoryMapFlags::empty())?;
+    let memory = device.map_memory(staging_buffer.memory, 0, size, vk::MemoryMapFlags::empty())?;
     copy_nonoverlapping(vertices.as_ptr(), memory.cast(), vertices.len());
-    device.unmap_memory(staging_buffer_memory);
+    device.unmap_memory(staging_buffer.memory);
 
     // Create vertex buffer
-    let (vertex_buffer, vertex_buffer_memory) = create_buffer(
+    let vertex_buffer = create_buffer(
         instance,
         device,
         physical_device,
         size,
         vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::VERTEX_BUFFER,
-        // XXX - Split buffers that will be used later (and probably with data copied using memcpy) and buffers used to store data passed as arg here (using device local memory)
+        // TODO: Split buffers that will be used later (and probably with data copied using memcpy) and buffers used to store data passed as arg here (using device local memory)
         vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE,
     )?;
 
@@ -141,19 +163,19 @@ pub unsafe fn create_vertex_buffer(
         device,
         graphics_queue,
         command_pool,
-        staging_buffer,
-        vertex_buffer,
+        staging_buffer.buffer,
+        vertex_buffer.buffer,
         size,
     )?;
 
     // Cleanup
-    device.destroy_buffer(staging_buffer, None);
-    device.free_memory(staging_buffer_memory, None);
+    device.destroy_buffer(staging_buffer.buffer, None);
+    device.free_memory(staging_buffer.memory, None);
 
-    Ok((vertex_buffer, vertex_buffer_memory))
+    Ok(vertex_buffer)
 }
 
-// TODO - Check if we can have a method for any "staged" buffer copy (source -> staging -> destination)
+// TODO: Check if we can have a method for any "staged" buffer copy (source -> staging -> destination)
 pub unsafe fn create_index_buffer(
     instance: &Instance,
     device: &Device,
@@ -162,8 +184,8 @@ pub unsafe fn create_index_buffer(
     command_pool: vk::CommandPool,
     indices: &[u32],
     size: vk::DeviceSize,
-) -> Result<(vk::Buffer, vk::DeviceMemory)> {
-    let (staging_buffer, staging_buffer_memory) = create_buffer(
+) -> Result<BufferAllocation> {
+    let staging_buffer = create_buffer(
         instance,
         device,
         physical_device,
@@ -172,17 +194,17 @@ pub unsafe fn create_index_buffer(
         vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE,
     )?;
 
-    let memory = device.map_memory(staging_buffer_memory, 0, size, vk::MemoryMapFlags::empty())?;
+    let memory = device.map_memory(staging_buffer.memory, 0, size, vk::MemoryMapFlags::empty())?;
     copy_nonoverlapping(indices.as_ptr(), memory.cast(), indices.len());
-    device.unmap_memory(staging_buffer_memory);
+    device.unmap_memory(staging_buffer.memory);
 
-    let (index_buffer, index_buffer_memory) = create_buffer(
+    let index_buffer = create_buffer(
         instance,
         device,
         physical_device,
         size,
         vk::BufferUsageFlags::TRANSFER_DST | vk::BufferUsageFlags::INDEX_BUFFER,
-        // TODO - Split buffers that will be used later (and probably with data copied using memcpy) and buffers used to store data passed as arg here (using device local memory)
+        // TODO: Split buffers that will be used later (and probably with data copied using memcpy) and buffers used to store data passed as arg here (using device local memory)
         vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE,
     )?;
 
@@ -190,16 +212,16 @@ pub unsafe fn create_index_buffer(
         device,
         graphics_queue,
         command_pool,
-        staging_buffer,
-        index_buffer,
+        staging_buffer.buffer,
+        index_buffer.buffer,
         size,
     )?;
 
     // Cleanup
-    device.destroy_buffer(staging_buffer, None);
-    device.free_memory(staging_buffer_memory, None);
+    device.destroy_buffer(staging_buffer.buffer, None);
+    device.free_memory(staging_buffer.memory, None);
 
-    Ok((index_buffer, index_buffer_memory))
+    Ok(index_buffer)
 }
 
 // Vulkan expects data to be aligned in memory in a specific way.
@@ -218,10 +240,9 @@ pub unsafe fn create_uniform_buffers(
     data: &mut EngineData,
 ) -> Result<()> {
     data.uniform_buffers.clear();
-    data.uniform_buffers_memory.clear();
 
     for _ in 0..data.swapchain_images.len() {
-        let (uniform_buffer, uniform_buffer_memory) = create_buffer(
+        let uniform_buffer = create_buffer(
             instance,
             device,
             data.physical_device,
@@ -230,7 +251,6 @@ pub unsafe fn create_uniform_buffers(
             vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE,
         )?;
         data.uniform_buffers.push(uniform_buffer);
-        data.uniform_buffers_memory.push(uniform_buffer_memory);
     }
 
     Ok(())

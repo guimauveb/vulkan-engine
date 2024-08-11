@@ -1,4 +1,6 @@
-// TODO - Custom build to automatically compile shaders when compiling the program
+// TODO:- Custom build to automatically compile shaders when compiling the program
+//      - Check pub/private code
+//      - Docstring
 
 mod buffer;
 mod camera;
@@ -7,7 +9,7 @@ mod descriptor_sets;
 mod device;
 mod gui;
 mod image;
-mod model;
+mod mesh;
 mod pipeline;
 mod swapchain;
 mod texture;
@@ -15,9 +17,7 @@ mod vertex;
 
 use {
     anyhow::{anyhow, Result},
-    buffer::{
-        create_index_buffer, create_uniform_buffers, create_vertex_buffer, UniformBufferObject,
-    },
+    buffer::{create_uniform_buffers, create_vertex_buffer, BufferAllocation, UniformBufferObject},
     camera::Camera,
     cgmath::{point3, vec3, Deg, Matrix4, Vector2, Vector3, Vector4},
     command_buffers::{create_command_buffers, create_command_pool},
@@ -28,13 +28,14 @@ use {
     hashbrown::HashSet,
     image::{create_color_objects, create_depth_objects, create_image_view, get_depth_format},
     log::{debug, error, info, trace, warn},
+    mesh::{load_gltf_meshes, load_obj_meshes, MeshBuffers},
     minstant::Instant,
-    model::load_model,
     pipeline::{create_descriptor_set_layout, create_pipeline, create_render_pass},
     std::{
         ffi::CStr,
         mem::size_of,
         os::raw::c_void,
+        path::Path,
         ptr::{addr_of, copy_nonoverlapping},
         slice,
     },
@@ -43,7 +44,7 @@ use {
     vertex::Vertex,
     vulkanalia::{
         loader::{LibloadingLoader, LIBRARY},
-        prelude::v1_0::{
+        prelude::v1_2::{
             vk::{
                 self, ExtDebugUtilsExtension, Handle, KhrSurfaceExtension, KhrSwapchainExtension,
             },
@@ -68,7 +69,10 @@ const VALIDATION_LAYER: vk::ExtensionName =
     vk::ExtensionName::from_bytes(b"VK_LAYER_KHRONOS_validation");
 
 /// Required device extensions.
-const DEVICE_EXTENSIONS: &[vk::ExtensionName] = &[vk::KHR_SWAPCHAIN_EXTENSION.name];
+const DEVICE_EXTENSIONS: &[vk::ExtensionName] = &[
+    vk::KHR_SWAPCHAIN_EXTENSION.name,
+    vk::KHR_BUFFER_DEVICE_ADDRESS_EXTENSION.name,
+];
 
 /// Vulkan SDK version that started requiring the portability subset extension for macOS.
 const PORTABILITY_MACOS_VERSION: Version = Version::new(1, 3, 216);
@@ -147,18 +151,15 @@ struct EngineData {
     vertices: Vec<Vertex>,
     indices: Vec<u32>,
     // Buffers
-    vertex_buffer: vk::Buffer,
-    vertex_buffer_memory: vk::DeviceMemory,
-    index_buffer: vk::Buffer,
-    index_buffer_memory: vk::DeviceMemory,
-    uniform_buffers: Vec<vk::Buffer>,
-    uniform_buffers_memory: Vec<vk::DeviceMemory>,
+    vertex_buffer: BufferAllocation,
+    index_buffer: BufferAllocation,
+    uniform_buffers: Vec<BufferAllocation>,
     // Descriptors
     descriptor_pool: vk::DescriptorPool,
     descriptor_sets: Vec<vk::DescriptorSet>,
     // Command buffers
     command_pool: vk::CommandPool,
-    command_pools: Vec<vk::CommandPool>,
+    framebuffers_command_pools: Vec<vk::CommandPool>,
     command_buffers: Vec<vk::CommandBuffer>,
     secondary_command_buffers: Vec<Vec<vk::CommandBuffer>>,
     // Sync objects
@@ -177,11 +178,11 @@ unsafe fn create_instance(
     data: &mut EngineData,
 ) -> Result<Instance> {
     let enginelication_info = vk::ApplicationInfo::builder()
-        .application_name(b"Vulkan Tutorial\0")
+        .application_name(b"vulkan-engine\0")
         .application_version(vk::make_version(1, 0, 0))
-        .engine_name(b"No Engine\0")
+        .engine_name(b"vulkan-engine\0")
         .engine_version(vk::make_version(1, 0, 0))
-        .api_version(vk::make_version(1, 0, 0));
+        .api_version(vk::make_version(1, 3, 0));
     let available_layers = entry
         .enumerate_instance_layer_properties()?
         .iter()
@@ -319,34 +320,25 @@ impl Engine {
         for _ in 0..data.swapchain_images.len() {
             let command_pool =
                 create_command_pool(&instance, &device, data.physical_device, data.surface)?;
-            data.command_pools.push(command_pool);
+            data.framebuffers_command_pools.push(command_pool);
         }
 
         create_color_objects(&instance, &device, &mut data)?;
         create_depth_objects(&instance, &device, &mut data)?;
         create_framebuffers(&device, &mut data)?;
+        // TODO: Proper scene loading
+        load_obj_meshes(&instance, &device, &mut data)?;
+        // TODO: WIP
+        load_gltf_meshes(
+            &instance,
+            &device,
+            &mut data,
+            Path::new("resources/basicmesh.glb"),
+        )?;
         create_texture_image(&instance, &device, &mut data)?;
         create_texture_image_view(&device, &mut data)?;
         create_texture_sampler(&device, &mut data)?;
-        load_model(&mut data)?;
-        (data.vertex_buffer, data.vertex_buffer_memory) = create_vertex_buffer(
-            &instance,
-            &device,
-            data.physical_device,
-            data.graphics_queue,
-            data.command_pool,
-            &data.vertices,
-            (size_of::<Vertex>() * data.vertices.len()) as vk::DeviceSize,
-        )?;
-        (data.index_buffer, data.index_buffer_memory) = create_index_buffer(
-            &instance,
-            &device,
-            data.physical_device,
-            data.graphics_queue,
-            data.command_pool,
-            &data.indices,
-            (size_of::<u32>() * data.indices.len()) as vk::DeviceSize,
-        )?;
+
         create_uniform_buffers(&instance, &device, &mut data)?;
         create_descriptor_pool(&device, &mut data)?;
         create_descriptor_sets(&device, &mut data)?;
@@ -454,14 +446,14 @@ impl Engine {
         let ubo = UniformBufferObject { view, proj };
 
         let memory = self.device.map_memory(
-            self.data.uniform_buffers_memory[image_index],
+            self.data.uniform_buffers[image_index].memory,
             0,
             size_of::<UniformBufferObject>() as vk::DeviceSize,
             vk::MemoryMapFlags::empty(),
         )?;
         copy_nonoverlapping(&ubo, memory.cast(), 1);
         self.device
-            .unmap_memory(self.data.uniform_buffers_memory[image_index]);
+            .unmap_memory(self.data.uniform_buffers[image_index].memory);
 
         Ok(())
     }
@@ -475,7 +467,7 @@ impl Engine {
         let command_buffers = &mut self.data.secondary_command_buffers[image_index];
         while model_index >= command_buffers.len() {
             let allocate_info = vk::CommandBufferAllocateInfo::builder()
-                .command_pool(self.data.command_pools[image_index])
+                .command_pool(self.data.framebuffers_command_pools[image_index])
                 .level(vk::CommandBufferLevel::SECONDARY)
                 .command_buffer_count(1);
             let command_buffer = self.device.allocate_command_buffers(&allocate_info)?[0];
@@ -505,11 +497,15 @@ impl Engine {
             vk::PipelineBindPoint::GRAPHICS,
             self.data.pipeline,
         );
-        self.device
-            .cmd_bind_vertex_buffers(command_buffer, 0, &[self.data.vertex_buffer], &[0]);
+        self.device.cmd_bind_vertex_buffers(
+            command_buffer,
+            0,
+            &[self.data.vertex_buffer.buffer],
+            &[0],
+        );
         self.device.cmd_bind_index_buffer(
             command_buffer,
-            self.data.index_buffer,
+            self.data.index_buffer.buffer,
             0,
             vk::IndexType::UINT32,
         );
@@ -541,6 +537,27 @@ impl Engine {
         self.device.end_command_buffer(command_buffer)?;
 
         Ok(command_buffer)
+    }
+
+    unsafe fn upload_mesh(&mut self, indices: &[u32], vertices: &[Vertex]) -> Result<MeshBuffers> {
+        let (index_buffer_size, vertex_buffer_size) = (
+            (indices.len() * size_of::<u32>()) as u64,
+            (vertices.len() * size_of::<Vertex>()) as u64,
+        );
+
+        let mut new_surface = MeshBuffers::default();
+        new_surface.vertex_buffer = create_vertex_buffer(
+            &self.instance,
+            &self.device,
+            self.data.physical_device,
+            self.data.graphics_queue,
+            self.data.command_pool,
+            vertices,
+            vertex_buffer_size,
+        )?;
+
+        // TODO: Get the address of the vertex buffer
+        todo!();
     }
 
     /// Update egui integration.
@@ -617,7 +634,7 @@ impl Engine {
     /// Update command buffer.
     unsafe fn update_command_buffer(&mut self, image_index: usize, window: &Window) -> Result<()> {
         // Reset
-        let command_pool = self.data.command_pools[image_index];
+        let command_pool = self.data.framebuffers_command_pools[image_index];
         self.device
             .reset_command_pool(command_pool, vk::CommandPoolResetFlags::empty())?;
 
@@ -744,11 +761,9 @@ impl Engine {
     unsafe fn destroy_swapchain(&mut self) {
         self.device
             .destroy_descriptor_pool(self.data.descriptor_pool, None);
-        for memory in self.data.uniform_buffers_memory.drain(..) {
-            self.device.free_memory(memory, None);
-        }
         for buffer in self.data.uniform_buffers.drain(..) {
-            self.device.destroy_buffer(buffer, None);
+            self.device.free_memory(buffer.memory, None);
+            self.device.destroy_buffer(buffer.buffer, None);
         }
         self.device
             .destroy_image_view(self.data.color_image_view, None);
@@ -781,7 +796,7 @@ impl Engine {
             gui.destroy();
         }
         self.destroy_swapchain();
-        for command_pool in self.data.command_pools.drain(..) {
+        for command_pool in self.data.framebuffers_command_pools.drain(..) {
             self.device.destroy_command_pool(command_pool, None);
         }
         for fence in self.data.in_flight_fences.drain(..) {
@@ -793,11 +808,13 @@ impl Engine {
         for semaphore in self.data.image_available_semaphores.drain(..) {
             self.device.destroy_semaphore(semaphore, None);
         }
-        self.device.free_memory(self.data.index_buffer_memory, None);
-        self.device.destroy_buffer(self.data.index_buffer, None);
+        self.device.free_memory(self.data.index_buffer.memory, None);
         self.device
-            .free_memory(self.data.vertex_buffer_memory, None);
-        self.device.destroy_buffer(self.data.vertex_buffer, None);
+            .destroy_buffer(self.data.index_buffer.buffer, None);
+        self.device
+            .free_memory(self.data.vertex_buffer.memory, None);
+        self.device
+            .destroy_buffer(self.data.vertex_buffer.buffer, None);
         self.device.destroy_sampler(self.data.texture_sampler, None);
         self.device
             .destroy_image_view(self.data.texture_image_view, None);
@@ -844,8 +861,8 @@ fn main() -> Result<()> {
     let window = WindowBuilder::new()
         .with_title("vulkan-engine")
         .with_inner_size(LogicalSize::new(1920, 1080))
-        // TODO - Handle fullscreen
-        //.with_fullscreen(Some(winit::window::Fullscreen::Borderless(None)))
+        // TODO: Handle fullscreen
+        // .with_fullscreen(Some(winit::window::Fullscreen::Borderless(None)))
         .build(&event_loop)?;
     window.set_cursor_visible(true);
 

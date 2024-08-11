@@ -11,7 +11,8 @@ use {
 
 // It should be noted that it is uncommon in practice to generate the mipmap levels at runtime anyway.
 // Usually they are pregenerated and stored in the texture file alongside the base level to improve loading speed.
-// TODO - Implementing resizing in software and loading multiple levels from a file is left as an exercise to the reader.
+
+// TODO: Implementing resizing in software and loading multiple levels from a file is left as an exercise to the reader.
 unsafe fn generate_mipmaps(
     instance: &Instance,
     device: &Device,
@@ -155,7 +156,8 @@ unsafe fn generate_mipmaps(
 // All of the helper functions that submit commands so far have been set up to execute synchronously by waiting for the queue to become idle.
 // For practical applications it is recommended to combine these operations in a single command buffer and execute them asynchronously for higher throughput,
 // especially the transitions and copy in the create_texture_image function.
-// TODO - Try to experiment with this by creating a setup_command_buffer that the helper functions record commands into,
+
+// TODO: Try to experiment with this by creating a setup_command_buffer that the helper functions record commands into,
 // and add a flush_setup_commands to execute the commands that have been recorded so far.
 // It's best to do this after the texture mapping works to check if the texture resources are still set up correctly.
 pub unsafe fn create_texture_image(
@@ -178,7 +180,7 @@ pub unsafe fn create_texture_image(
 
     let size = size as vk::DeviceSize;
     // Create staging buffer
-    let (staging_buffer, staging_buffer_memory) = create_buffer(
+    let staging_buffer = create_buffer(
         instance,
         device,
         data.physical_device,
@@ -188,9 +190,9 @@ pub unsafe fn create_texture_image(
     )?;
 
     // Copy to staging buffer
-    let memory = device.map_memory(staging_buffer_memory, 0, size, vk::MemoryMapFlags::empty())?;
+    let memory = device.map_memory(staging_buffer.memory, 0, size, vk::MemoryMapFlags::empty())?;
     copy_nonoverlapping(pixels.as_ptr(), memory.cast(), pixels.len());
-    device.unmap_memory(staging_buffer_memory);
+    device.unmap_memory(staging_buffer.memory);
 
     data.mip_levels = (width.max(height) as f32).log2().floor() as u32 + 1;
 
@@ -225,14 +227,14 @@ pub unsafe fn create_texture_image(
     copy_buffer_to_image(
         device,
         data,
-        staging_buffer,
+        staging_buffer.buffer,
         data.texture_image,
         width,
         height,
     )?;
 
-    device.destroy_buffer(staging_buffer, None);
-    device.free_memory(staging_buffer_memory, None);
+    device.destroy_buffer(staging_buffer.buffer, None);
+    device.free_memory(staging_buffer.memory, None);
 
     generate_mipmaps(
         instance,

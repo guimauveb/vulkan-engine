@@ -14,7 +14,7 @@ pub unsafe fn create_descriptor_sets(device: &Device, data: &mut EngineData) -> 
 
     for i in 0..data.swapchain_images.len() {
         let info = vk::DescriptorBufferInfo::builder()
-            .buffer(data.uniform_buffers[i])
+            .buffer(data.uniform_buffers[i].buffer)
             .offset(0)
             // Could use vk::WHOLE_SIZE here
             .range(size_of::<UniformBufferObject>() as vk::DeviceSize);

@@ -1,6 +1,6 @@
 use {
     super::{
-        buffer::{create_buffer, create_index_buffer, create_vertex_buffer},
+        buffer::{create_buffer, create_index_buffer, create_vertex_buffer, BufferAllocation},
         command_buffers::create_command_pool,
         image::{create_image, create_image_view},
     },
@@ -356,7 +356,7 @@ pub struct Integration {
     state: State,
     graphics_queue: vk::Queue,
     queue_family_index: u32,
-    // TODO - Remove when buffer creation has been updated
+    // TODO: Remove when buffer creation has been updated
     command_pools: Vec<vk::CommandPool>,
     descriptor_pool: vk::DescriptorPool,
     descriptor_set_layouts: Vec<vk::DescriptorSetLayout>,
@@ -366,10 +366,8 @@ pub struct Integration {
     render_pass: vk::RenderPass,
     framebuffer_color_image_views: Vec<vk::ImageView>,
     framebuffers: Vec<vk::Framebuffer>,
-    vertex_buffers: Vec<vk::Buffer>,
-    vertex_buffer_allocations: Vec<vk::DeviceMemory>,
-    index_buffers: Vec<vk::Buffer>,
-    index_buffer_allocations: Vec<vk::DeviceMemory>,
+    vertex_buffers: Vec<BufferAllocation>,
+    index_buffers: Vec<BufferAllocation>,
     texture_desc_sets: AHashMap<TextureId, vk::DescriptorSet>,
     texture_images: AHashMap<TextureId, vk::Image>,
     texture_image_infos: AHashMap<TextureId, vk::ImageCreateInfo>,
@@ -441,11 +439,10 @@ impl Integration {
             .collect::<Result<Vec<_>, _>>()?;
 
         // Create vertex buffer and index buffer
-        let (mut vertex_buffers, mut vertex_buffer_allocations) = (Vec::new(), Vec::new());
-        let (mut index_buffers, mut index_buffer_allocations) = (Vec::new(), Vec::new());
+        let (mut vertex_buffers, mut index_buffers) = (Vec::new(), Vec::new());
         for command_pool in command_pools.iter().take(framebuffers.len()) {
-            // TODO - Use create_buffer instead
-            let (vertex_buffer, vertex_buffer_memory) = create_vertex_buffer(
+            // TODO: Use create_buffer instead
+            let vertex_buffer = create_vertex_buffer(
                 &instance,
                 &device,
                 physical_device,
@@ -455,9 +452,8 @@ impl Integration {
                 Self::vertex_buffer_size(),
             )?;
             vertex_buffers.push(vertex_buffer);
-            vertex_buffer_allocations.push(vertex_buffer_memory);
-            // TODO - Use create_buffer instead
-            let (index_buffer, index_buffer_memory) = create_index_buffer(
+            // TODO: Use create_buffer instead
+            let index_buffer = create_index_buffer(
                 &instance,
                 &device,
                 physical_device,
@@ -467,7 +463,6 @@ impl Integration {
                 Self::index_buffer_size(),
             )?;
             index_buffers.push(index_buffer);
-            index_buffer_allocations.push(index_buffer_memory);
         }
 
         let user_texture_layout = device.create_descriptor_set_layout(
@@ -501,9 +496,7 @@ impl Integration {
             framebuffer_color_image_views,
             framebuffers,
             vertex_buffers,
-            vertex_buffer_allocations,
             index_buffers,
-            index_buffer_allocations,
             texture_desc_sets: AHashMap::new(),
             texture_images: AHashMap::new(),
             texture_image_infos: AHashMap::new(),
@@ -534,7 +527,7 @@ impl Integration {
         self.state.egui_ctx().clone()
     }
 
-    // TODO - Refactoring
+    // TODO: Refactoring
     unsafe fn update_texture(&mut self, texture_id: TextureId, delta: ImageDelta) -> Result<()> {
         // Extract pixel data from egui
         let data: Vec<u8> = match &delta.image {
@@ -571,9 +564,9 @@ impl Integration {
             self.device.create_fence(&info, None)?
         };
 
-        // TODO - Check if we can have a method like create_vertex/index_buffer for any "staged" buffer copy (source -> staging -> destination)
+        // TODO: Check if we can have a method like create_vertex/index_buffer for any "staged" buffer copy (source -> staging -> destination)
         let size = data.len() as vk::DeviceSize;
-        let (staging_buffer, staging_buffer_memory) = {
+        let staging_buffer = {
             create_buffer(
                 &self.instance,
                 &self.device,
@@ -586,7 +579,7 @@ impl Integration {
         // Copy to staging buffer
         let memory =
             self.device
-                .map_memory(staging_buffer_memory, 0, size, vk::MemoryMapFlags::empty())?;
+                .map_memory(staging_buffer.memory, 0, size, vk::MemoryMapFlags::empty())?;
         copy_nonoverlapping(data.as_ptr(), memory.cast(), data.len());
 
         let (texture_image, texture_image_memory) = create_image(
@@ -605,7 +598,7 @@ impl Integration {
             vk::MemoryPropertyFlags::DEVICE_LOCAL,
         )?;
 
-        // TODO - Update create_image or use a specific method to retrieve the ImageCreateInfo.
+        // TODO: Update create_image or use a specific method to retrieve the ImageCreateInfo.
         // self.texture_image_infos.insert(texture_id, info);
         let texture_image_view = create_image_view(
             &self.device,
@@ -658,7 +651,7 @@ impl Integration {
             });
         self.device.cmd_copy_buffer_to_image(
             cmd_buff,
-            staging_buffer,
+            staging_buffer.buffer,
             texture_image,
             vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             &[region],
@@ -855,15 +848,15 @@ impl Integration {
         }
 
         // Cleanup
-        self.device.destroy_buffer(staging_buffer, None);
-        self.device.free_memory(staging_buffer_memory, None);
+        self.device.destroy_buffer(staging_buffer.buffer, None);
+        self.device.free_memory(staging_buffer.memory, None);
         self.device.destroy_command_pool(cmd_pool, None);
         self.device.destroy_fence(cmd_buff_fence, None);
 
         Ok(())
     }
 
-    // TODO - Refactoring
+    // TODO: Refactoring
     pub unsafe fn paint(
         &mut self,
         command_buffer: vk::CommandBuffer,
@@ -878,7 +871,7 @@ impl Integration {
         let mut vertex_buffer_ptr = self
             .device
             .map_memory(
-                self.vertex_buffer_allocations[image_index],
+                self.vertex_buffers[image_index].memory,
                 0,
                 Self::vertex_buffer_size(),
                 vk::MemoryMapFlags::empty(),
@@ -889,7 +882,7 @@ impl Integration {
         let mut index_buffer_ptr = self
             .device
             .map_memory(
-                self.index_buffer_allocations[image_index],
+                self.index_buffers[image_index].memory,
                 0,
                 Self::index_buffer_size(),
                 vk::MemoryMapFlags::empty(),
@@ -923,12 +916,12 @@ impl Integration {
         self.device.cmd_bind_vertex_buffers(
             command_buffer,
             0,
-            &[self.vertex_buffers[image_index]],
+            &[self.vertex_buffers[image_index].buffer],
             &[0],
         );
         self.device.cmd_bind_index_buffer(
             command_buffer,
-            self.index_buffers[image_index],
+            self.index_buffers[image_index].buffer,
             0,
             vk::IndexType::UINT32,
         );
@@ -1086,9 +1079,9 @@ impl Integration {
         // End render pass
         self.device.cmd_end_render_pass(command_buffer);
         self.device
-            .unmap_memory(self.vertex_buffer_allocations[image_index]);
+            .unmap_memory(self.vertex_buffers[image_index].memory);
         self.device
-            .unmap_memory(self.index_buffer_allocations[image_index]);
+            .unmap_memory(self.index_buffers[image_index].memory);
 
         Ok(())
     }
@@ -1144,21 +1137,13 @@ impl Integration {
         for command_pool in self.command_pools.drain(..) {
             self.device.destroy_command_pool(command_pool, None);
         }
-        for (buffer, allocation) in self
-            .index_buffers
-            .drain(..)
-            .zip(self.index_buffer_allocations.drain(..))
-        {
-            self.device.destroy_buffer(buffer, None);
-            self.device.free_memory(allocation, None);
+        for buffer in self.index_buffers.drain(..) {
+            self.device.destroy_buffer(buffer.buffer, None);
+            self.device.free_memory(buffer.memory, None);
         }
-        for (buffer, allocation) in self
-            .vertex_buffers
-            .drain(..)
-            .zip(self.vertex_buffer_allocations.drain(..))
-        {
-            self.device.destroy_buffer(buffer, None);
-            self.device.free_memory(allocation, None);
+        for buffer in self.vertex_buffers.drain(..) {
+            self.device.destroy_buffer(buffer.buffer, None);
+            self.device.free_memory(buffer.memory, None);
         }
         self.device.destroy_sampler(self.sampler, None);
         self.device

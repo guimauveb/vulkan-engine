@@ -7,7 +7,7 @@ use {
 pub unsafe fn create_command_buffers(device: &Device, data: &mut EngineData) -> Result<()> {
     for image_index in 0..data.swapchain_images.len() {
         let allocate_info = vk::CommandBufferAllocateInfo::builder()
-            .command_pool(data.command_pools[image_index])
+            .command_pool(data.framebuffers_command_pools[image_index])
             .level(vk::CommandBufferLevel::PRIMARY)
             .command_buffer_count(1);
         let command_buffer = device.allocate_command_buffers(&allocate_info)?[0];

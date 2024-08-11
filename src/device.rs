@@ -69,7 +69,7 @@ unsafe fn check_physical_device_extensions(
         }
         Ok(())
     } else {
-        // TODO - List missing extensions
+        // TODO: List missing extensions
         Err(anyhow!(SuitabilityError("Required device extensions")))
     }
 }
@@ -160,11 +160,13 @@ pub unsafe fn create_logical_device(
     let features = vk::PhysicalDeviceFeatures::builder()
         .sampler_anisotropy(true)
         .sample_rate_shading(true);
+    let mut features_12 = vk::PhysicalDeviceVulkan12Features::builder().buffer_device_address(true);
     let info = vk::DeviceCreateInfo::builder()
         .queue_create_infos(&queue_infos)
         .enabled_layer_names(&layers)
         .enabled_extension_names(&extensions)
-        .enabled_features(&features);
+        .enabled_features(&features)
+        .push_next(&mut features_12);
     let device = instance.create_device(data.physical_device, &info, None)?;
 
     data.graphics_queue = device.get_device_queue(indices.graphics, 0);
