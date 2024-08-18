@@ -1,10 +1,8 @@
-use {
-    super::{vertex::Vertex, EngineData, Mat4},
-    anyhow::{anyhow, Result},
-    std::{mem::size_of, ptr::copy_nonoverlapping},
-    vulkanalia::prelude::v1_3::{
-        vk, Device, DeviceV1_0, DeviceV1_2, Handle, HasBuilder, Instance, InstanceV1_0,
-    },
+use super::{vertex::Vertex, EngineData, Mat4};
+use anyhow::{anyhow, Result};
+use std::{mem::size_of, ptr::copy_nonoverlapping};
+use vulkanalia::prelude::v1_3::{
+    vk, Device, DeviceV1_0, DeviceV1_2, Handle, HasBuilder, Instance, InstanceV1_0,
 };
 
 pub unsafe fn begin_single_time_commands(

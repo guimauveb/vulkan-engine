@@ -1,12 +1,10 @@
-use {
-    super::{create_image_view, EngineData, QueueFamilyIndices},
-    anyhow::Result,
-    vulkanalia::prelude::v1_3::{
-        vk::{self, Handle, KhrSurfaceExtension, KhrSwapchainExtension},
-        Device, HasBuilder, Instance,
-    },
-    winit::window::Window,
+use super::{create_image_view, EngineData, QueueFamilyIndices};
+use anyhow::Result;
+use vulkanalia::prelude::v1_3::{
+    vk::{self, Handle, KhrSurfaceExtension, KhrSwapchainExtension},
+    Device, HasBuilder, Instance,
 };
+use winit::window::Window;
 
 #[derive(Clone, Debug)]
 pub struct SwapchainSupport {

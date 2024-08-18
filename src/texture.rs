@@ -1,13 +1,11 @@
-use {
-    super::{
-        buffer::{begin_single_time_commands, end_single_time_commands, BufferAllocation},
-        image::{copy_buffer_to_image, create_image, create_image_view, transition_image_layout},
-        EngineData,
-    },
-    anyhow::{anyhow, Result},
-    std::{fs::File, ptr::copy_nonoverlapping},
-    vulkanalia::prelude::v1_3::{vk, Device, DeviceV1_0, HasBuilder, Instance, InstanceV1_0},
+use super::{
+    buffer::{begin_single_time_commands, end_single_time_commands, BufferAllocation},
+    image::{copy_buffer_to_image, create_image, create_image_view, transition_image_layout},
+    EngineData,
 };
+use anyhow::{anyhow, Result};
+use std::{fs::File, ptr::copy_nonoverlapping};
+use vulkanalia::prelude::v1_3::{vk, Device, DeviceV1_0, HasBuilder, Instance, InstanceV1_0};
 
 // It should be noted that it is uncommon in practice to generate the mipmap levels at runtime anyway.
 // Usually they are pregenerated and stored in the texture file alongside the base level to improve loading speed.

@@ -1,10 +1,8 @@
-use {
-    super::{Mat4, Point3, Vec3},
-    cgmath::{vec3, Angle, Deg, InnerSpace},
-    winit::{
-        dpi::PhysicalPosition,
-        keyboard::{Key, NamedKey},
-    },
+use super::{Mat4, Point3, Vec3};
+use cgmath::{vec3, Angle, Deg, InnerSpace};
+use winit::{
+    dpi::PhysicalPosition,
+    keyboard::{Key, NamedKey},
 };
 
 /// Camera speed

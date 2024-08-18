@@ -1,11 +1,9 @@
-use {
-    super::{
-        buffer::{begin_single_time_commands, end_single_time_commands, get_memory_type_index},
-        EngineData,
-    },
-    anyhow::{anyhow, Result},
-    vulkanalia::prelude::v1_3::{vk, Device, DeviceV1_0, HasBuilder, Instance, InstanceV1_0},
+use super::{
+    buffer::{begin_single_time_commands, end_single_time_commands, get_memory_type_index},
+    EngineData,
 };
+use anyhow::{anyhow, Result};
+use vulkanalia::prelude::v1_3::{vk, Device, DeviceV1_0, HasBuilder, Instance, InstanceV1_0};
 
 pub unsafe fn copy_buffer_to_image(
     device: &Device,

@@ -1,20 +1,18 @@
 // TODO: Abstract and general mesh loading (implement most popular formats)
-use {
-    super::{
-        buffer::{create_index_buffer, create_vertex_buffer, BufferAllocation},
-        vertex::Vertex,
-        EngineData, Mat4,
-    },
-    anyhow::Result,
-    cgmath::{vec2, vec3},
-    gltf::{
-        accessor::Iter,
-        mesh::util::{ReadColors, ReadIndices, ReadTexCoords},
-    },
-    hashbrown::HashMap,
-    std::{fs::File, io::BufReader, mem::size_of, path::Path},
-    vulkanalia::{vk, Device, Instance},
+use super::{
+    buffer::{create_index_buffer, create_vertex_buffer, BufferAllocation},
+    vertex::Vertex,
+    EngineData, Mat4,
 };
+use anyhow::Result;
+use cgmath::{vec2, vec3};
+use gltf::{
+    accessor::Iter,
+    mesh::util::{ReadColors, ReadIndices, ReadTexCoords},
+};
+use hashbrown::HashMap;
+use std::{fs::File, io::BufReader, mem::size_of, path::Path};
+use vulkanalia::{vk, Device, Instance};
 
 pub unsafe fn load_obj_meshes(
     instance: &Instance,

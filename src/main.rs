@@ -15,50 +15,46 @@ mod swapchain;
 mod texture;
 mod vertex;
 
-use {
-    anyhow::{anyhow, Result},
-    buffer::{create_uniform_buffers, create_vertex_buffer, BufferAllocation, UniformBufferObject},
-    camera::Camera,
-    cgmath::{point3, vec3, Deg, Matrix4, Vector2, Vector3, Vector4},
-    command_buffers::{create_command_buffers, create_command_pool},
-    descriptor_sets::{create_descriptor_pool, create_descriptor_sets},
-    device::{create_logical_device, pick_physical_device, QueueFamilyIndices},
-    egui::{FontDefinitions, Style},
-    gui::{EguiTheme, Integration},
-    hashbrown::HashSet,
-    image::{create_color_objects, create_depth_objects, create_image_view, get_depth_format},
-    log::{debug, error, info, trace, warn},
-    mesh::{load_gltf_meshes, load_obj_meshes, MeshBuffers},
-    minstant::Instant,
-    pipeline::{create_descriptor_set_layout, create_pipeline, create_render_pass},
-    std::{
-        ffi::CStr,
-        mem::size_of,
-        os::raw::c_void,
-        path::Path,
-        ptr::{addr_of, copy_nonoverlapping},
-        slice,
+use anyhow::{anyhow, Result};
+use buffer::{create_uniform_buffers, create_vertex_buffer, BufferAllocation, UniformBufferObject};
+use camera::Camera;
+use cgmath::{point3, vec3, Deg, Matrix4, Vector2, Vector3, Vector4};
+use command_buffers::{create_command_buffers, create_command_pool};
+use descriptor_sets::{create_descriptor_pool, create_descriptor_sets};
+use device::{create_logical_device, pick_physical_device, QueueFamilyIndices};
+use egui::{FontDefinitions, Style};
+use gui::{EguiTheme, Integration};
+use hashbrown::HashSet;
+use image::{create_color_objects, create_depth_objects, create_image_view, get_depth_format};
+use log::{debug, error, info, trace, warn};
+use mesh::{load_gltf_meshes, load_obj_meshes, MeshBuffers};
+use minstant::Instant;
+use pipeline::{create_descriptor_set_layout, create_pipeline, create_render_pass};
+use std::{
+    ffi::CStr,
+    mem::size_of,
+    os::raw::c_void,
+    path::Path,
+    ptr::{addr_of, copy_nonoverlapping},
+    slice,
+};
+use swapchain::{create_swapchain, create_swapchain_image_views};
+use texture::{create_texture_image, create_texture_image_view, create_texture_sampler};
+use vertex::Vertex;
+use vulkanalia::{
+    loader::{LibloadingLoader, LIBRARY},
+    prelude::v1_3::{
+        vk::{self, ExtDebugUtilsExtension, Handle, KhrSurfaceExtension, KhrSwapchainExtension},
+        Device, DeviceV1_0, Entry, EntryV1_0, HasBuilder, Instance, InstanceV1_0,
     },
-    swapchain::{create_swapchain, create_swapchain_image_views},
-    texture::{create_texture_image, create_texture_image_view, create_texture_sampler},
-    vertex::Vertex,
-    vulkanalia::{
-        loader::{LibloadingLoader, LIBRARY},
-        prelude::v1_3::{
-            vk::{
-                self, ExtDebugUtilsExtension, Handle, KhrSurfaceExtension, KhrSwapchainExtension,
-            },
-            Device, DeviceV1_0, Entry, EntryV1_0, HasBuilder, Instance, InstanceV1_0,
-        },
-        window as vk_window, Version,
-    },
-    winit::{
-        dpi::LogicalSize,
-        event::{Event, KeyEvent, StartCause, WindowEvent},
-        event_loop::{ControlFlow, EventLoop},
-        keyboard::{Key, NamedKey},
-        window::{Window, WindowBuilder},
-    },
+    window as vk_window, Version,
+};
+use winit::{
+    dpi::LogicalSize,
+    event::{Event, KeyEvent, StartCause, WindowEvent},
+    event_loop::{ControlFlow, EventLoop},
+    keyboard::{Key, NamedKey},
+    window::{Window, WindowBuilder},
 };
 
 /// Whether validation layers should be enabled.

@@ -1,10 +1,8 @@
-use {
-    super::{get_depth_format, vertex::Vertex, EngineData},
-    anyhow::Result,
-    vulkanalia::{
-        bytecode::Bytecode,
-        prelude::v1_3::{vk, Device, DeviceV1_0, Handle, HasBuilder, Instance},
-    },
+use super::{get_depth_format, vertex::Vertex, EngineData};
+use anyhow::Result;
+use vulkanalia::{
+    bytecode::Bytecode,
+    prelude::v1_3::{vk, Device, DeviceV1_0, Handle, HasBuilder, Instance},
 };
 
 pub unsafe fn create_render_pass(

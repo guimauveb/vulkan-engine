@@ -1,30 +1,28 @@
-use {
-    super::{
-        buffer::{create_index_buffer, create_vertex_buffer, BufferAllocation},
-        command_buffers::create_command_pool,
-        image::{create_image, create_image_view},
-    },
-    anyhow::{anyhow, Result},
-    bytemuck::bytes_of,
-    egui::{
-        epaint::{ahash::AHashMap, image::ImageDelta, Primitive},
-        ClippedPrimitive, Context, FontDefinitions, FullOutput, ImageData, Pos2, Style, TextureId,
-        TexturesDelta,
-    },
-    egui_winit::{
-        winit::{event::WindowEvent, window::Window},
-        EventResponse, State,
-    },
-    log::error,
-    raw_window_handle::HasRawDisplayHandle,
-    std::{
-        mem::{size_of, size_of_val},
-        ptr::copy_nonoverlapping,
-    },
-    vulkanalia::{
-        prelude::v1_3::{vk, Device, DeviceV1_0, Handle, HasBuilder, Instance},
-        vk::KhrSwapchainExtension,
-    },
+use super::{
+    buffer::{create_index_buffer, create_vertex_buffer, BufferAllocation},
+    command_buffers::create_command_pool,
+    image::{create_image, create_image_view},
+};
+use anyhow::{anyhow, Result};
+use bytemuck::bytes_of;
+use egui::{
+    epaint::{ahash::AHashMap, image::ImageDelta, Primitive},
+    ClippedPrimitive, Context, FontDefinitions, FullOutput, ImageData, Pos2, Style, TextureId,
+    TexturesDelta,
+};
+use egui_winit::{
+    winit::{event::WindowEvent, window::Window},
+    EventResponse, State,
+};
+use log::error;
+use raw_window_handle::HasRawDisplayHandle;
+use std::{
+    mem::{size_of, size_of_val},
+    ptr::copy_nonoverlapping,
+};
+use vulkanalia::{
+    prelude::v1_3::{vk, Device, DeviceV1_0, Handle, HasBuilder, Instance},
+    vk::KhrSwapchainExtension,
 };
 
 #[derive(Default, Debug, PartialEq, Eq)]

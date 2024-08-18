@@ -1,9 +1,7 @@
-use {
-    super::{buffer::UniformBufferObject, EngineData},
-    anyhow::Result,
-    std::mem::size_of,
-    vulkanalia::prelude::v1_3::{vk, Device, DeviceV1_0, HasBuilder},
-};
+use super::{buffer::UniformBufferObject, EngineData};
+use anyhow::Result;
+use std::mem::size_of;
+use vulkanalia::prelude::v1_3::{vk, Device, DeviceV1_0, HasBuilder};
 
 pub unsafe fn create_descriptor_sets(device: &Device, data: &mut EngineData) -> Result<()> {
     let layouts = vec![data.descriptor_set_layout; data.swapchain_images.len()];

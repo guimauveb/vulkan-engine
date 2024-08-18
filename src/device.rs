@@ -1,16 +1,14 @@
-use {
-    super::{
-        swapchain::SwapchainSupport, EngineData, DEVICE_EXTENSIONS, ENABLE_VALIDATION_LAYER,
-        PORTABILITY_MACOS_VERSION, VALIDATION_LAYER,
-    },
-    anyhow::{anyhow, Result},
-    hashbrown::HashSet,
-    log::{info, warn},
-    thiserror::Error as ThisError,
-    vulkanalia::prelude::v1_3::{
-        vk::{self, KhrSurfaceExtension},
-        Device, DeviceV1_0, Entry, HasBuilder, Instance, InstanceV1_0,
-    },
+use super::{
+    swapchain::SwapchainSupport, EngineData, DEVICE_EXTENSIONS, ENABLE_VALIDATION_LAYER,
+    PORTABILITY_MACOS_VERSION, VALIDATION_LAYER,
+};
+use anyhow::{anyhow, Result};
+use hashbrown::HashSet;
+use log::{info, warn};
+use thiserror::Error as ThisError;
+use vulkanalia::prelude::v1_3::{
+    vk::{self, KhrSurfaceExtension},
+    Device, DeviceV1_0, Entry, HasBuilder, Instance, InstanceV1_0,
 };
 
 #[derive(Debug, ThisError)]

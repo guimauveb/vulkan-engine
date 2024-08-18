@@ -1,8 +1,6 @@
-use {
-    super::{EngineData, QueueFamilyIndices},
-    anyhow::Result,
-    vulkanalia::prelude::v1_3::{vk, Device, DeviceV1_0, HasBuilder, Instance},
-};
+use super::{EngineData, QueueFamilyIndices};
+use anyhow::Result;
+use vulkanalia::prelude::v1_3::{vk, Device, DeviceV1_0, HasBuilder, Instance};
 
 pub unsafe fn create_command_buffers(device: &Device, data: &mut EngineData) -> Result<()> {
     for image_index in 0..data.swapchain_images.len() {

@@ -1,11 +1,9 @@
-use {
-    super::{Vec2, Vec3},
-    std::{
-        hash::{Hash, Hasher},
-        mem::size_of,
-    },
-    vulkanalia::prelude::v1_3::{vk, HasBuilder},
+use super::{Vec2, Vec3};
+use std::{
+    hash::{Hash, Hasher},
+    mem::size_of,
 };
+use vulkanalia::prelude::v1_3::{vk, HasBuilder};
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
