@@ -28,6 +28,7 @@ pub struct Camera {
     on_left_edge: bool,
     on_right_edge: bool,
     mouse_position: PhysicalPosition<f32>,
+    enabled: bool,
 }
 
 impl Camera {
@@ -50,6 +51,7 @@ impl Camera {
             on_left_edge: false,
             on_right_edge: false,
             mouse_position: PhysicalPosition::new(width as f32 / 2.0, height as f32 / 2.0),
+            enabled: true,
         }
     }
 
@@ -71,6 +73,22 @@ impl Camera {
     }
 
     pub fn on_keyboard(&mut self, key: Key) {
+        if let Key::Character(key) = &key {
+            match key.as_str() {
+                "c" => {
+                    self.enabled = false;
+                }
+                "C" => {
+                    self.enabled = true;
+                }
+                _ => (),
+            }
+        }
+
+        if !self.enabled {
+            return;
+        }
+
         // FIXME - Arrow keys not detected
         match key {
             Key::Named(key) => match key {
@@ -126,6 +144,7 @@ impl Camera {
                     self.eye -= self.up * SPEED;
                     self.update();
                 }
+
                 _ => {}
             },
             // TODO: Handle more inputs to change camera behaviour (speed, etc)
@@ -135,6 +154,10 @@ impl Camera {
 
     // FIXME - Border detection
     pub fn on_mouse(&mut self, position: PhysicalPosition<f32>) {
+        if !self.enabled {
+            return;
+        }
+
         let (delta_x, delta_y) = (
             position.x - self.mouse_position.x,
             self.mouse_position.y - position.y,

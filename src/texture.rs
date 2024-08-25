@@ -1,5 +1,6 @@
 use super::{
-    buffer::{begin_single_time_commands, end_single_time_commands, BufferAllocation},
+    buffer::BufferAllocation,
+    command_buffers::{begin_single_time_commands, end_single_time_commands},
     image::{copy_buffer_to_image, create_image, create_image_view, transition_image_layout},
     EngineData,
 };
@@ -194,7 +195,7 @@ pub unsafe fn create_texture_image(
 
     data.mip_levels = (width.max(height) as f32).log2().floor() as u32 + 1;
 
-    let (texture_image, texture_image_memory) = create_image(
+    (data.texture_image, data.texture_image_memory) = create_image(
         instance,
         device,
         data.physical_device,
@@ -209,8 +210,6 @@ pub unsafe fn create_texture_image(
             | vk::ImageUsageFlags::TRANSFER_SRC,
         vk::MemoryPropertyFlags::DEVICE_LOCAL,
     )?;
-    data.texture_image = texture_image;
-    data.texture_image_memory = texture_image_memory;
 
     // Transition + copy
     transition_image_layout(

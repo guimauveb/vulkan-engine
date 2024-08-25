@@ -32,7 +32,7 @@ impl Vertex {
     }
 
     pub fn attribute_descriptions(
-    ) -> [impl vk::Cast<Target = vk::VertexInputAttributeDescription>; 3] {
+    ) -> [impl vk::Cast<Target = vk::VertexInputAttributeDescription>; 4] {
         let pos = vk::VertexInputAttributeDescription::builder()
             .binding(0)
             .location(0)
@@ -48,8 +48,13 @@ impl Vertex {
             .location(2)
             .format(vk::Format::R32G32_SFLOAT)
             .offset((size_of::<Vec3>() + size_of::<Vec3>()) as u32);
+        let normal = vk::VertexInputAttributeDescription::builder()
+            .binding(0)
+            .location(3)
+            .format(vk::Format::R32G32B32_SFLOAT)
+            .offset((size_of::<Vec3>() + size_of::<Vec3>() + size_of::<Vec2>()) as u32);
 
-        [pos, color, text_coord]
+        [pos, color, text_coord, normal]
     }
 }
 

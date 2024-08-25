@@ -2,6 +2,9 @@
 //      - Check pub/private code
 //      - Docstring
 
+// TODO: Remove
+#![allow(unused)]
+
 mod buffer;
 mod camera;
 mod command_buffers;
@@ -16,7 +19,10 @@ mod texture;
 mod vertex;
 
 use anyhow::{anyhow, Result};
-use buffer::{create_uniform_buffers, create_vertex_buffer, BufferAllocation, UniformBufferObject};
+use buffer::{
+    create_index_buffer, create_uniform_buffers, create_vertex_buffer, BufferAllocation,
+    UniformBufferObject,
+};
 use camera::Camera;
 use cgmath::{point3, vec3, Deg, Matrix4, Vector2, Vector3, Vector4};
 use command_buffers::{create_command_buffers, create_command_pool};
@@ -27,14 +33,13 @@ use gui::{EguiTheme, Integration};
 use hashbrown::HashSet;
 use image::{create_color_objects, create_depth_objects, create_image_view, get_depth_format};
 use log::{debug, error, info, trace, warn};
-use mesh::{load_gltf_meshes, load_obj_meshes, MeshBuffers};
+use mesh::{obj::load_obj_meshes, DrawPushConstants, MeshBuffers};
 use minstant::Instant;
 use pipeline::{create_descriptor_set_layout, create_pipeline, create_render_pass};
 use std::{
     ffi::CStr,
     mem::size_of,
     os::raw::c_void,
-    path::Path,
     ptr::{addr_of, copy_nonoverlapping},
     slice,
 };
@@ -319,15 +324,10 @@ impl Engine {
         create_color_objects(&instance, &device, &mut data)?;
         create_depth_objects(&instance, &device, &mut data)?;
         create_framebuffers(&device, &mut data)?;
-        // TODO: Proper scene loading
+
+        // TODO: Proper scene rendering
         load_obj_meshes(&instance, &device, &mut data)?;
-        // TODO: WIP
-        load_gltf_meshes(
-            &instance,
-            &device,
-            &mut data,
-            Path::new("resources/basicmesh.glb"),
-        )?;
+
         create_texture_image(&instance, &device, &mut data)?;
         create_texture_image_view(&device, &mut data)?;
         create_texture_sampler(&device, &mut data)?;
@@ -451,6 +451,36 @@ impl Engine {
         Ok(())
     }
 
+    // TODO: Use
+    unsafe fn upload_mesh(&mut self, indices: &[u32], vertices: &[Vertex]) -> Result<MeshBuffers> {
+        let (index_buffer_size, vertex_buffer_size) = (
+            (indices.len() * size_of::<u32>()) as u64,
+            (vertices.len() * size_of::<Vertex>()) as u64,
+        );
+
+        let mut new_surface = MeshBuffers::default();
+        new_surface.vertex_buffer = create_vertex_buffer(
+            &self.instance,
+            &self.device,
+            self.data.physical_device,
+            self.data.graphics_queue,
+            self.data.command_pool,
+            vertices,
+            vertex_buffer_size,
+        )?;
+        new_surface.index_buffer = create_index_buffer(
+            &self.instance,
+            &self.device,
+            self.data.physical_device,
+            self.data.graphics_queue,
+            self.data.command_pool,
+            indices,
+            index_buffer_size,
+        )?;
+
+        Ok(new_surface)
+    }
+
     /// Update secondary command buffers.
     unsafe fn update_secondary_command_buffer(
         &mut self,
@@ -466,13 +496,14 @@ impl Engine {
             let command_buffer = self.device.allocate_command_buffers(&allocate_info)?[0];
             command_buffers.push(command_buffer);
         }
-
         let command_buffer = command_buffers[model_index];
 
-        let model = Mat4::from_angle_y(Deg(-90.0)) * Mat4::from_angle_x(Deg(-90.0));
-        let model_bytes = slice::from_raw_parts(addr_of!(model).cast::<u8>(), size_of::<Mat4>());
-
-        let opacity_bytes = &100.0f32.to_ne_bytes()[..];
+        let model = Mat4::from_angle_y(Deg(90.0)) * Mat4::from_angle_x(Deg(-90.0));
+        let push_constants = DrawPushConstants::new(model, self.data.vertex_buffer.address());
+        let push_constants_bytes = slice::from_raw_parts(
+            addr_of!(push_constants).cast::<u8>(),
+            size_of::<DrawPushConstants>(),
+        );
 
         // Commands
         let inheritance_info = vk::CommandBufferInheritanceInfo::builder()
@@ -490,11 +521,12 @@ impl Engine {
             vk::PipelineBindPoint::GRAPHICS,
             self.data.pipeline,
         );
-        self.device.cmd_bind_vertex_buffers(
+        self.device.cmd_push_constants(
             command_buffer,
+            self.data.pipeline_layout,
+            vk::ShaderStageFlags::VERTEX,
             0,
-            &[self.data.vertex_buffer.buffer],
-            &[0],
+            push_constants_bytes,
         );
         self.device.cmd_bind_index_buffer(
             command_buffer,
@@ -510,118 +542,13 @@ impl Engine {
             &[self.data.descriptor_sets[image_index]],
             &[],
         );
-        self.device.cmd_push_constants(
-            command_buffer,
-            self.data.pipeline_layout,
-            vk::ShaderStageFlags::VERTEX,
-            0,
-            model_bytes,
-        );
-        self.device.cmd_push_constants(
-            command_buffer,
-            self.data.pipeline_layout,
-            vk::ShaderStageFlags::FRAGMENT,
-            64,
-            opacity_bytes,
-        );
+
         self.device
             .cmd_draw_indexed(command_buffer, self.data.indices.len() as u32, 1, 0, 0, 0);
 
         self.device.end_command_buffer(command_buffer)?;
 
         Ok(command_buffer)
-    }
-
-    unsafe fn upload_mesh(&mut self, indices: &[u32], vertices: &[Vertex]) -> Result<MeshBuffers> {
-        let (index_buffer_size, vertex_buffer_size) = (
-            (indices.len() * size_of::<u32>()) as u64,
-            (vertices.len() * size_of::<Vertex>()) as u64,
-        );
-
-        let mut new_surface = MeshBuffers::default();
-        new_surface.vertex_buffer = create_vertex_buffer(
-            &self.instance,
-            &self.device,
-            self.data.physical_device,
-            self.data.graphics_queue,
-            self.data.command_pool,
-            vertices,
-            vertex_buffer_size,
-        )?;
-
-        // TODO: Get the address of the vertex buffer
-        todo!();
-    }
-
-    /// Update egui integration.
-    unsafe fn update_gui(
-        &mut self,
-        command_buffer: vk::CommandBuffer,
-        image_index: usize,
-        window: &Window,
-    ) -> Result<()> {
-        if let (Some(egui_integration), Some(theme)) = (
-            self.data.egui_integration.as_mut(),
-            self.data.theme.as_mut(),
-        ) {
-            match theme {
-                EguiTheme::Dark => egui_integration
-                    .context()
-                    .set_visuals(egui::style::Visuals::dark()),
-                EguiTheme::Light => egui_integration
-                    .context()
-                    .set_visuals(egui::style::Visuals::light()),
-            }
-
-            egui_integration.begin_frame(window);
-            egui::SidePanel::left("my_side_panel").show(&egui_integration.context(), |ui| {
-                ui.heading("vulkan-engine");
-                ui.label("v0.1.0");
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.label("Theme");
-                    let id = ui.make_persistent_id("theme_combo_box_side");
-                    egui::ComboBox::from_id_source(id)
-                        .selected_text(format!("{theme:?}"))
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(theme, EguiTheme::Dark, "Dark");
-                            ui.selectable_value(theme, EguiTheme::Light, "Light");
-                        });
-                });
-                ui.separator();
-            });
-            egui::Window::new("Window 1")
-                .resizable(true)
-                .scroll2([true, true])
-                .show(&egui_integration.context(), |ui| {
-                    ui.heading("vulkan-engine");
-                    ui.label("v0.1.0");
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        ui.label("Theme");
-                        let id = ui.make_persistent_id("theme_combo_box_window");
-                        egui::ComboBox::from_id_source(id)
-                            .selected_text(format!("{theme:?}"))
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(theme, EguiTheme::Dark, "Dark");
-                                ui.selectable_value(theme, EguiTheme::Light, "Light");
-                            });
-                    });
-                    ui.separator();
-                });
-            let output = egui_integration.end_frame(window);
-            let clipped_meshes = egui_integration
-                .context()
-                .tessellate(output.shapes, window.scale_factor() as f32);
-            egui_integration.paint(
-                command_buffer,
-                image_index,
-                clipped_meshes,
-                output.textures_delta,
-            )?;
-        }
-
-        Ok(())
     }
 
     /// Update command buffer.
@@ -825,8 +752,82 @@ impl Engine {
     }
 }
 
+/// GUI related methods
+impl Engine {
+    /// Update egui integration.
+    unsafe fn update_gui(
+        &mut self,
+        command_buffer: vk::CommandBuffer,
+        image_index: usize,
+        window: &Window,
+    ) -> Result<()> {
+        if let (Some(egui_integration), Some(theme)) = (
+            self.data.egui_integration.as_mut(),
+            self.data.theme.as_mut(),
+        ) {
+            match theme {
+                EguiTheme::Dark => egui_integration
+                    .context()
+                    .set_visuals(egui::style::Visuals::dark()),
+                EguiTheme::Light => egui_integration
+                    .context()
+                    .set_visuals(egui::style::Visuals::light()),
+            }
+
+            egui_integration.begin_frame(window);
+            egui::SidePanel::left("my_side_panel").show(&egui_integration.context(), |ui| {
+                ui.heading("vulkan-engine");
+                ui.label("v0.1.0");
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label("Theme");
+                    let id = ui.make_persistent_id("theme_combo_box_side");
+                    egui::ComboBox::from_id_source(id)
+                        .selected_text(format!("{theme:?}"))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(theme, EguiTheme::Dark, "Dark");
+                            ui.selectable_value(theme, EguiTheme::Light, "Light");
+                        });
+                });
+                ui.separator();
+            });
+            egui::Window::new("Window 1")
+                .resizable(true)
+                .scroll2([true, true])
+                .show(&egui_integration.context(), |ui| {
+                    ui.heading("vulkan-engine");
+                    ui.label("v0.1.0");
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        ui.label("Theme");
+                        let id = ui.make_persistent_id("theme_combo_box_window");
+                        egui::ComboBox::from_id_source(id)
+                            .selected_text(format!("{theme:?}"))
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(theme, EguiTheme::Dark, "Dark");
+                                ui.selectable_value(theme, EguiTheme::Light, "Light");
+                            });
+                    });
+                    ui.separator();
+                });
+            let output = egui_integration.end_frame(window);
+            let clipped_meshes = egui_integration
+                .context()
+                .tessellate(output.shapes, window.scale_factor() as f32);
+            egui_integration.paint(
+                command_buffer,
+                image_index,
+                clipped_meshes,
+                output.textures_delta,
+            )?;
+        }
+
+        Ok(())
+    }
+}
+
 fn render(engine: &mut Engine, window: &Window) -> Result<()> {
-    /// Limit the number of frames to 60 per second.
+    /// Limit the number of frames
     const FRAME_CAP: f32 = 1.0 / 60.0;
 
     let now = Instant::now();

@@ -1,3 +1,5 @@
+use crate::mesh::DrawPushConstants;
+
 use super::{get_depth_format, vertex::Vertex, EngineData};
 use anyhow::Result;
 use vulkanalia::{
@@ -140,12 +142,8 @@ pub unsafe fn create_pipeline(device: &Device, data: &mut EngineData) -> Result<
         .module(frag_shader_module)
         .name(b"main\0");
 
-    // Vertex input state
-    let binding_descriptions = &[Vertex::binding_description()];
-    let attribute_descriptions = Vertex::attribute_descriptions();
-    let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::builder()
-        .vertex_binding_descriptions(binding_descriptions)
-        .vertex_attribute_descriptions(&attribute_descriptions);
+    // Vertex input state. Nothing to do here as we do vertex pulling.
+    let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::builder();
 
     // Input assembly state
     let input_assembly_state = vk::PipelineInputAssemblyStateCreateInfo::builder()
@@ -220,15 +218,11 @@ pub unsafe fn create_pipeline(device: &Device, data: &mut EngineData) -> Result<
     let vert_push_constant_range = vk::PushConstantRange::builder()
         .stage_flags(vk::ShaderStageFlags::VERTEX)
         .offset(0)
-        .size(64); // 16 * 4 bytes floats
-    let frag_push_constant_range = vk::PushConstantRange::builder()
-        .stage_flags(vk::ShaderStageFlags::FRAGMENT)
-        .offset(64)
-        .size(4);
+        .size(size_of::<DrawPushConstants>() as u32);
 
     // Layout
     let set_layouts = &[data.descriptor_set_layout];
-    let push_constant_ranges = &[vert_push_constant_range, frag_push_constant_range];
+    let push_constant_ranges = &[vert_push_constant_range];
     let layout_info = vk::PipelineLayoutCreateInfo::builder()
         .set_layouts(set_layouts)
         .push_constant_ranges(push_constant_ranges);
