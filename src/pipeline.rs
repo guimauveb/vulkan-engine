@@ -1,6 +1,5 @@
-use crate::mesh::DrawPushConstants;
-
 use super::{get_depth_format, vertex::Vertex, EngineData};
+use crate::mesh::DrawPushConstants;
 use anyhow::Result;
 use vulkanalia::{
     bytecode::Bytecode,
@@ -142,7 +141,7 @@ pub unsafe fn create_pipeline(device: &Device, data: &mut EngineData) -> Result<
         .module(frag_shader_module)
         .name(b"main\0");
 
-    // Vertex input state. Nothing to do here as we do vertex pulling.
+    // Vertex input state
     let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::builder();
 
     // Input assembly state

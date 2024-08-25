@@ -451,7 +451,6 @@ impl Engine {
         Ok(())
     }
 
-    // TODO: Use
     unsafe fn upload_mesh(&mut self, indices: &[u32], vertices: &[Vertex]) -> Result<MeshBuffers> {
         let (index_buffer_size, vertex_buffer_size) = (
             (indices.len() * size_of::<u32>()) as u64,
@@ -498,8 +497,9 @@ impl Engine {
         }
         let command_buffer = command_buffers[model_index];
 
-        let model = Mat4::from_angle_y(Deg(90.0)) * Mat4::from_angle_x(Deg(-90.0));
-        let push_constants = DrawPushConstants::new(model, self.data.vertex_buffer.address());
+        let world_matrix = Mat4::from_angle_y(Deg(-90.0)) * Mat4::from_angle_x(Deg(-90.0));
+        let push_constants =
+            DrawPushConstants::new(world_matrix, self.data.vertex_buffer.address());
         let push_constants_bytes = slice::from_raw_parts(
             addr_of!(push_constants).cast::<u8>(),
             size_of::<DrawPushConstants>(),

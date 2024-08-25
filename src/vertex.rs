@@ -1,4 +1,4 @@
-use super::{Vec2, Vec3};
+use super::{Vec2, Vec3, Vec4};
 use std::{
     hash::{Hash, Hasher},
     mem::size_of,
@@ -9,17 +9,19 @@ use vulkanalia::prelude::v1_3::{vk, HasBuilder};
 #[derive(Copy, Clone, Debug)]
 pub struct Vertex {
     pub position: Vec3,
-    pub color: Vec3,
-    pub tex_coord: Vec2,
+    pub uv_x: f32,
     pub normal: Vec3,
+    pub uv_y: f32,
+    pub color: Vec4,
 }
 
 impl Vertex {
-    pub const fn new(position: Vec3, color: Vec3, tex_coord: Vec2, normal: Vec3) -> Self {
+    pub fn new(position: Vec3, color: Vec4, tex_coord: Vec2, normal: Vec3) -> Self {
         Self {
             position,
+            uv_x: tex_coord[0],
             color,
-            tex_coord,
+            uv_y: tex_coord[1],
             normal,
         }
     }
@@ -61,9 +63,10 @@ impl Vertex {
 impl PartialEq for Vertex {
     fn eq(&self, other: &Self) -> bool {
         self.position == other.position
-            && self.color == other.color
-            && self.tex_coord == other.tex_coord
+            && self.uv_x == other.uv_x
             && self.normal == other.normal
+            && self.uv_y == other.uv_y
+            && self.color == other.color
     }
 }
 
@@ -74,13 +77,14 @@ impl Hash for Vertex {
         self.position[0].to_bits().hash(state);
         self.position[1].to_bits().hash(state);
         self.position[2].to_bits().hash(state);
-        self.color[0].to_bits().hash(state);
-        self.color[1].to_bits().hash(state);
-        self.color[2].to_bits().hash(state);
-        self.tex_coord[0].to_bits().hash(state);
-        self.tex_coord[1].to_bits().hash(state);
+        self.uv_x.to_bits().hash(state);
         self.normal[0].to_bits().hash(state);
         self.normal[1].to_bits().hash(state);
         self.normal[2].to_bits().hash(state);
+        self.uv_y.to_bits().hash(state);
+        self.color[0].to_bits().hash(state);
+        self.color[1].to_bits().hash(state);
+        self.color[2].to_bits().hash(state);
+        self.color[3].to_bits().hash(state);
     }
 }
