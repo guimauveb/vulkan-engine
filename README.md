@@ -2,7 +2,7 @@
 
 A basic Vulkan renderer written in Rust and built around [vulkanalia](https://github.com/KyleMayes/vulkanalia), [egui](https://github.com/emilk/egui), [egui-winit](https://github.com/emilk/egui/tree/master/crates/egui-winit) and [winit](https://github.com/rust-windowing/winit).
 
-![vulkan-engine](https://github.com/guimauveb/vulkan-engine/blob/dev/vulkan-engine.png?raw=true)
+![vulkan-engine](https://github.com/guimauveb/vulkan-engine/blob/master/vulkan-engine.png?raw=true)
 
 ## Integration with egui and winit
 With the help of [egui-winit-ash-integration](https://github.com/MatchaChoco010/egui-winit-ash-integration) I managed to successfully integrate `egui`, `winit`, `egui_winit` and `vulkanalia`.
