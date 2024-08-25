@@ -1,9 +1,7 @@
+use super::{vertex::Vertex, Mat4};
 use crate::command_buffers::{begin_single_time_commands, end_single_time_commands};
-
-use super::{vertex::Vertex, EngineData, Mat4};
 use anyhow::{anyhow, Result};
-use log::error;
-use std::{mem::size_of, ptr::copy_nonoverlapping};
+use std::ptr::copy_nonoverlapping;
 use vulkanalia::prelude::v1_3::{
     vk, Device, DeviceV1_0, DeviceV1_2, HasBuilder, Instance, InstanceV1_0,
 };
@@ -116,6 +114,7 @@ pub unsafe fn copy_buffer(
     Ok(())
 }
 
+// TODO: - To do on a dedicated thread
 pub unsafe fn create_vertex_buffer(
     instance: &Instance,
     device: &Device,
@@ -168,7 +167,7 @@ pub unsafe fn create_vertex_buffer(
     Ok(vertex_buffer)
 }
 
-// TODO: - Perform the staging -> on a dedicated thread
+// TODO: - To do on a dedicated thread
 pub unsafe fn create_index_buffer(
     instance: &Instance,
     device: &Device,
@@ -224,26 +223,4 @@ pub unsafe fn create_index_buffer(
 pub struct UniformBufferObject {
     pub view: Mat4,
     pub proj: Mat4,
-}
-
-pub unsafe fn create_uniform_buffers(
-    instance: &Instance,
-    device: &Device,
-    data: &mut EngineData,
-) -> Result<()> {
-    data.uniform_buffers.clear();
-
-    for _ in 0..data.swapchain_images.len() {
-        let uniform_buffer = BufferAllocation::new(
-            instance,
-            device,
-            data.physical_device,
-            size_of::<UniformBufferObject>() as vk::DeviceSize,
-            vk::BufferUsageFlags::UNIFORM_BUFFER,
-            vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE,
-        )?;
-        data.uniform_buffers.push(uniform_buffer);
-    }
-
-    Ok(())
 }

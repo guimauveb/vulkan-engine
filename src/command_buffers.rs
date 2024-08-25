@@ -1,4 +1,4 @@
-use super::{EngineData, QueueFamilyIndices};
+use super::QueueFamilyIndices;
 use anyhow::Result;
 use vulkanalia::prelude::v1_3::{vk, Device, DeviceV1_0, Handle, HasBuilder, Instance};
 
@@ -32,21 +32,6 @@ pub unsafe fn end_single_time_commands(
     device.queue_submit(graphics_queue, &[info], vk::Fence::null())?;
     device.queue_wait_idle(graphics_queue)?;
     device.free_command_buffers(command_pool, &[command_buffer]);
-
-    Ok(())
-}
-
-pub unsafe fn create_command_buffers(device: &Device, data: &mut EngineData) -> Result<()> {
-    for image_index in 0..data.swapchain_images.len() {
-        let allocate_info = vk::CommandBufferAllocateInfo::builder()
-            .command_pool(data.framebuffers_command_pools[image_index])
-            .level(vk::CommandBufferLevel::PRIMARY)
-            .command_buffer_count(1);
-        let command_buffer = device.allocate_command_buffers(&allocate_info)?[0];
-        data.command_buffers.push(command_buffer);
-    }
-
-    data.secondary_command_buffers = vec![vec![]; data.swapchain_images.len()];
 
     Ok(())
 }

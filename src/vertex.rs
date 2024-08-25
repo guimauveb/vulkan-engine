@@ -26,6 +26,8 @@ impl Vertex {
         }
     }
 
+    // TODO: Compare vertex binding against vertex pulling
+    #[allow(dead_code)]
     pub fn binding_description() -> impl vk::Cast<Target = vk::VertexInputBindingDescription> {
         vk::VertexInputBindingDescription::builder()
             .binding(0)
@@ -33,6 +35,8 @@ impl Vertex {
             .input_rate(vk::VertexInputRate::VERTEX)
     }
 
+    // TODO: Compare vertex binding against vertex pulling
+    #[allow(dead_code)]
     pub fn attribute_descriptions(
     ) -> [impl vk::Cast<Target = vk::VertexInputAttributeDescription>; 4] {
         let pos = vk::VertexInputAttributeDescription::builder()

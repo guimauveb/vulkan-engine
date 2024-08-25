@@ -1,8 +1,8 @@
 use super::{
     buffer::BufferAllocation,
     command_buffers::{begin_single_time_commands, end_single_time_commands},
+    engine::engine_data::EngineData,
     image::{copy_buffer_to_image, create_image, create_image_view, transition_image_layout},
-    EngineData,
 };
 use anyhow::{anyhow, Result};
 use std::{fs::File, ptr::copy_nonoverlapping};

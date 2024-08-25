@@ -1,7 +1,7 @@
 use super::{
     buffer::get_memory_type_index,
     command_buffers::{begin_single_time_commands, end_single_time_commands},
-    EngineData,
+    engine::engine_data::EngineData,
 };
 use anyhow::{anyhow, Result};
 use vulkanalia::prelude::v1_3::{vk, Device, DeviceV1_0, HasBuilder, Instance, InstanceV1_0};
@@ -39,6 +39,7 @@ pub unsafe fn copy_buffer_to_image(
         vk::ImageLayout::TRANSFER_DST_OPTIMAL,
         &[region],
     );
+
     end_single_time_commands(
         device,
         data.graphics_queue,
@@ -204,38 +205,9 @@ pub unsafe fn create_image_view(
     Ok(device.create_image_view(&info, None)?)
 }
 
-pub unsafe fn create_color_objects(
-    instance: &Instance,
-    device: &Device,
-    data: &mut EngineData,
-) -> Result<()> {
-    (data.color_image, data.color_image_memory) = create_image(
-        instance,
-        device,
-        data.physical_device,
-        data.swapchain_extent.width,
-        data.swapchain_extent.height,
-        1,
-        data.msaa_samples,
-        data.swapchain_format,
-        vk::ImageTiling::OPTIMAL,
-        vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSIENT_ATTACHMENT,
-        vk::MemoryPropertyFlags::DEVICE_LOCAL,
-    )?;
-    data.color_image_view = create_image_view(
-        device,
-        data.color_image,
-        data.swapchain_format,
-        vk::ImageAspectFlags::COLOR,
-        1,
-    )?;
-
-    Ok(())
-}
-
 unsafe fn get_supported_format(
     instance: &Instance,
-    data: &EngineData,
+    physical_device: vk::PhysicalDevice,
     candidates: &[vk::Format],
     tiling: vk::ImageTiling,
     features: vk::FormatFeatureFlags,
@@ -243,8 +215,7 @@ unsafe fn get_supported_format(
     candidates
         .iter()
         .find(|&&f| {
-            let properties =
-                instance.get_physical_device_format_properties(data.physical_device, f);
+            let properties = instance.get_physical_device_format_properties(physical_device, f);
             match tiling {
                 vk::ImageTiling::LINEAR => properties.linear_tiling_features.contains(features),
                 vk::ImageTiling::OPTIMAL => properties.optimal_tiling_features.contains(features),
@@ -255,7 +226,10 @@ unsafe fn get_supported_format(
         .ok_or_else(|| anyhow!("Failed to find supported format"))
 }
 
-pub unsafe fn get_depth_format(instance: &Instance, data: &EngineData) -> Result<vk::Format> {
+pub unsafe fn get_depth_format(
+    instance: &Instance,
+    physical_device: vk::PhysicalDevice,
+) -> Result<vk::Format> {
     let candidates = &[
         vk::Format::D32_SFLOAT,
         vk::Format::D32_SFLOAT_S8_UINT,
@@ -263,39 +237,9 @@ pub unsafe fn get_depth_format(instance: &Instance, data: &EngineData) -> Result
     ];
     get_supported_format(
         instance,
-        data,
+        physical_device,
         candidates,
         vk::ImageTiling::OPTIMAL,
         vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT,
     )
-}
-
-pub unsafe fn create_depth_objects(
-    instance: &Instance,
-    device: &Device,
-    data: &mut EngineData,
-) -> Result<()> {
-    let format = get_depth_format(instance, data)?;
-    (data.depth_image, data.depth_image_memory) = create_image(
-        instance,
-        device,
-        data.physical_device,
-        data.swapchain_extent.width,
-        data.swapchain_extent.height,
-        1,
-        data.msaa_samples,
-        format,
-        vk::ImageTiling::OPTIMAL,
-        vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
-        vk::MemoryPropertyFlags::DEVICE_LOCAL,
-    )?;
-    data.depth_image_view = create_image_view(
-        device,
-        data.depth_image,
-        format,
-        vk::ImageAspectFlags::DEPTH,
-        1,
-    )?;
-
-    Ok(())
 }
