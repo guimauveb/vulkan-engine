@@ -24,7 +24,7 @@ pub unsafe fn get_memory_type_index(
         .ok_or_else(|| anyhow!("Failed to find suitable memory type"))
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct BufferAllocation {
     pub buffer: vk::Buffer,
     pub memory: vk::DeviceMemory,

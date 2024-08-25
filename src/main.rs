@@ -33,13 +33,16 @@ use gui::{EguiTheme, Integration};
 use hashbrown::HashSet;
 use image::{create_color_objects, create_depth_objects, create_image_view, get_depth_format};
 use log::{debug, error, info, trace, warn};
-use mesh::{obj::load_obj_meshes, DrawPushConstants, MeshBuffers};
+use mesh::{
+    gltf::load_gltf_meshes, obj::load_obj_meshes, DrawPushConstants, MeshAsset, MeshBuffers,
+};
 use minstant::Instant;
 use pipeline::{create_descriptor_set_layout, create_pipeline, create_render_pass};
 use std::{
     ffi::CStr,
     mem::size_of,
     os::raw::c_void,
+    path::Path,
     ptr::{addr_of, copy_nonoverlapping},
     slice,
 };
@@ -168,6 +171,9 @@ struct EngineData {
     // Gui
     egui_integration: Option<Integration>,
     theme: Option<EguiTheme>,
+
+    // Meshes
+    meshes: Vec<MeshAsset>,
 }
 
 unsafe fn create_instance(
@@ -296,7 +302,7 @@ struct Engine {
 
 impl Engine {
     /// Create a Vulkan engine.
-    unsafe fn create(window: &Window) -> Result<Self> {
+    unsafe fn new(window: &Window) -> Result<Self> {
         let loader = LibloadingLoader::new(LIBRARY)?;
         let entry = Entry::new(loader).map_err(|err| anyhow!("{err}"))?;
         let mut data = EngineData::default();
@@ -324,9 +330,6 @@ impl Engine {
         create_color_objects(&instance, &device, &mut data)?;
         create_depth_objects(&instance, &device, &mut data)?;
         create_framebuffers(&device, &mut data)?;
-
-        // TODO: Proper scene rendering
-        load_obj_meshes(&instance, &device, &mut data)?;
 
         create_texture_image(&instance, &device, &mut data)?;
         create_texture_image_view(&device, &mut data)?;
@@ -365,7 +368,7 @@ impl Engine {
         data.theme = Some(EguiTheme::Dark);
         data.egui_integration = Some(egui_integration);
 
-        Ok(Self {
+        let mut engine = Self {
             _entry: entry,
             instance,
             data,
@@ -375,44 +378,11 @@ impl Engine {
             last_frame_time: Instant::now(),
             last_update_time: Instant::now(),
             camera,
-        })
-    }
+        };
 
-    /// Recreate swapchain.
-    unsafe fn recreate_swapchain(&mut self, window: &Window) -> Result<()> {
-        self.device.device_wait_idle()?;
-        self.destroy_swapchain();
+        load_gltf_meshes(&mut engine, Path::new("./assets/basicmesh.glb"))?;
 
-        create_swapchain(window, &self.instance, &self.device, &mut self.data)?;
-        create_swapchain_image_views(&self.device, &mut self.data)?;
-        create_render_pass(&self.instance, &self.device, &mut self.data)?;
-        create_pipeline(&self.device, &mut self.data)?;
-        create_color_objects(&self.instance, &self.device, &mut self.data)?;
-        create_depth_objects(&self.instance, &self.device, &mut self.data)?;
-        create_framebuffers(&self.device, &mut self.data)?;
-        create_uniform_buffers(&self.instance, &self.device, &mut self.data)?;
-        create_descriptor_pool(&self.device, &mut self.data)?;
-        create_descriptor_sets(&self.device, &mut self.data)?;
-        create_command_buffers(&self.device, &mut self.data)?;
-        self.data
-            .images_in_flight
-            .resize(self.data.swapchain_images.len(), vk::Fence::null());
-
-        self.camera.set_dimensions(
-            self.data.swapchain_extent.width,
-            self.data.swapchain_extent.height,
-        );
-
-        if let Some(egui) = self.data.egui_integration.as_mut() {
-            egui.recreate_swapchain(
-                self.data.swapchain_extent.width,
-                self.data.swapchain_extent.height,
-                self.data.swapchain,
-                self.data.swapchain_format,
-            )?;
-        }
-
-        Ok(())
+        Ok(engine)
     }
 
     /// Update uniform buffer.
@@ -457,8 +427,7 @@ impl Engine {
             (vertices.len() * size_of::<Vertex>()) as u64,
         );
 
-        let mut new_surface = MeshBuffers::default();
-        new_surface.vertex_buffer = create_vertex_buffer(
+        let vertex_buffer = create_vertex_buffer(
             &self.instance,
             &self.device,
             self.data.physical_device,
@@ -467,7 +436,7 @@ impl Engine {
             vertices,
             vertex_buffer_size,
         )?;
-        new_surface.index_buffer = create_index_buffer(
+        let index_buffer = create_index_buffer(
             &self.instance,
             &self.device,
             self.data.physical_device,
@@ -477,7 +446,7 @@ impl Engine {
             index_buffer_size,
         )?;
 
-        Ok(new_surface)
+        Ok(MeshBuffers::new(index_buffer, vertex_buffer))
     }
 
     /// Update secondary command buffers.
@@ -498,8 +467,10 @@ impl Engine {
         let command_buffer = command_buffers[model_index];
 
         let world_matrix = Mat4::from_angle_y(Deg(-90.0)) * Mat4::from_angle_x(Deg(-90.0));
-        let push_constants =
-            DrawPushConstants::new(world_matrix, self.data.vertex_buffer.address());
+        let push_constants = DrawPushConstants::new(
+            world_matrix,
+            self.data.meshes[0].mesh_buffers.vertex_buffer.address(),
+        );
         let push_constants_bytes = slice::from_raw_parts(
             addr_of!(push_constants).cast::<u8>(),
             size_of::<DrawPushConstants>(),
@@ -530,7 +501,7 @@ impl Engine {
         );
         self.device.cmd_bind_index_buffer(
             command_buffer,
-            self.data.index_buffer.buffer,
+            self.data.meshes[0].mesh_buffers.index_buffer.buffer,
             0,
             vk::IndexType::UINT32,
         );
@@ -543,8 +514,14 @@ impl Engine {
             &[],
         );
 
-        self.device
-            .cmd_draw_indexed(command_buffer, self.data.indices.len() as u32, 1, 0, 0, 0);
+        self.device.cmd_draw_indexed(
+            command_buffer,
+            self.data.meshes[0].surfaces[0].count,
+            1,
+            self.data.meshes[0].surfaces[0].start_index,
+            0,
+            0,
+        );
 
         self.device.end_command_buffer(command_buffer)?;
 
@@ -594,7 +571,6 @@ impl Engine {
             &info,
             vk::SubpassContents::SECONDARY_COMMAND_BUFFERS,
         );
-        // XXX - Not based on model number anymore
         let secondary_command_buffers = &[self.update_secondary_command_buffer(image_index, 0)?];
         self.device
             .cmd_execute_commands(command_buffer, secondary_command_buffers);
@@ -677,6 +653,105 @@ impl Engine {
         Ok(())
     }
 
+    /// Destroy the engine.
+    ///
+    /// # Unsafe
+    /// This method releases vk objects memory that is not managed by Rust.
+    unsafe fn destroy(&mut self) -> Result<()> {
+        self.device.device_wait_idle()?;
+        if let Some(gui) = self.data.egui_integration.as_mut() {
+            gui.destroy();
+        }
+        self.destroy_swapchain();
+        for command_pool in self.data.framebuffers_command_pools.drain(..) {
+            self.device.destroy_command_pool(command_pool, None);
+        }
+        for fence in self.data.in_flight_fences.drain(..) {
+            self.device.destroy_fence(fence, None);
+        }
+        for semaphore in self.data.render_finished_semaphores.drain(..) {
+            self.device.destroy_semaphore(semaphore, None);
+        }
+        for semaphore in self.data.image_available_semaphores.drain(..) {
+            self.device.destroy_semaphore(semaphore, None);
+        }
+
+        for mesh in self.data.meshes.drain(..) {
+            self.device
+                .destroy_buffer(mesh.mesh_buffers.index_buffer.buffer, None);
+            self.device
+                .free_memory(mesh.mesh_buffers.index_buffer.memory, None);
+            self.device
+                .destroy_buffer(mesh.mesh_buffers.vertex_buffer.buffer, None);
+            self.device
+                .free_memory(mesh.mesh_buffers.vertex_buffer.memory, None);
+        }
+
+        self.data.index_buffer.destroy(&self.device);
+        self.data.vertex_buffer.destroy(&self.device);
+
+        self.device.destroy_sampler(self.data.texture_sampler, None);
+        self.device
+            .destroy_image_view(self.data.texture_image_view, None);
+        self.device
+            .free_memory(self.data.texture_image_memory, None);
+        self.device.destroy_image(self.data.texture_image, None);
+        self.device
+            .destroy_command_pool(self.data.command_pool, None);
+        self.device
+            .destroy_descriptor_set_layout(self.data.descriptor_set_layout, None);
+        self.device.destroy_device(None);
+        self.instance.destroy_surface_khr(self.data.surface, None);
+        if ENABLE_VALIDATION_LAYER {
+            self.instance
+                .destroy_debug_utils_messenger_ext(self.data.messenger, None);
+        }
+
+        self.instance.destroy_instance(None);
+
+        Ok(())
+    }
+}
+
+/// Swapchain related methods
+impl Engine {
+    /// Recreate swapchain.
+    unsafe fn recreate_swapchain(&mut self, window: &Window) -> Result<()> {
+        self.device.device_wait_idle()?;
+        self.destroy_swapchain();
+
+        create_swapchain(window, &self.instance, &self.device, &mut self.data)?;
+        create_swapchain_image_views(&self.device, &mut self.data)?;
+        create_render_pass(&self.instance, &self.device, &mut self.data)?;
+        create_pipeline(&self.device, &mut self.data)?;
+        create_color_objects(&self.instance, &self.device, &mut self.data)?;
+        create_depth_objects(&self.instance, &self.device, &mut self.data)?;
+        create_framebuffers(&self.device, &mut self.data)?;
+        create_uniform_buffers(&self.instance, &self.device, &mut self.data)?;
+        create_descriptor_pool(&self.device, &mut self.data)?;
+        create_descriptor_sets(&self.device, &mut self.data)?;
+        create_command_buffers(&self.device, &mut self.data)?;
+        self.data
+            .images_in_flight
+            .resize(self.data.swapchain_images.len(), vk::Fence::null());
+
+        self.camera.set_dimensions(
+            self.data.swapchain_extent.width,
+            self.data.swapchain_extent.height,
+        );
+
+        if let Some(egui) = self.data.egui_integration.as_mut() {
+            egui.recreate_swapchain(
+                self.data.swapchain_extent.width,
+                self.data.swapchain_extent.height,
+                self.data.swapchain,
+                self.data.swapchain_format,
+            )?;
+        }
+
+        Ok(())
+    }
+
     /// Destroy swapchain.
     unsafe fn destroy_swapchain(&mut self) {
         self.device
@@ -703,52 +778,6 @@ impl Engine {
             self.device.destroy_image_view(image_view, None);
         }
         self.device.destroy_swapchain_khr(self.data.swapchain, None);
-    }
-
-    /// Destroy the engine.
-    ///
-    /// # Unsafe
-    /// This method releases vk objects memory that is not managed by Rust.
-    unsafe fn destroy(&mut self) -> Result<()> {
-        self.device.device_wait_idle()?;
-        if let Some(gui) = self.data.egui_integration.as_mut() {
-            gui.destroy();
-        }
-        self.destroy_swapchain();
-        for command_pool in self.data.framebuffers_command_pools.drain(..) {
-            self.device.destroy_command_pool(command_pool, None);
-        }
-        for fence in self.data.in_flight_fences.drain(..) {
-            self.device.destroy_fence(fence, None);
-        }
-        for semaphore in self.data.render_finished_semaphores.drain(..) {
-            self.device.destroy_semaphore(semaphore, None);
-        }
-        for semaphore in self.data.image_available_semaphores.drain(..) {
-            self.device.destroy_semaphore(semaphore, None);
-        }
-        self.data.index_buffer.destroy(&self.device);
-        self.data.vertex_buffer.destroy(&self.device);
-        self.device.destroy_sampler(self.data.texture_sampler, None);
-        self.device
-            .destroy_image_view(self.data.texture_image_view, None);
-        self.device
-            .free_memory(self.data.texture_image_memory, None);
-        self.device.destroy_image(self.data.texture_image, None);
-        self.device
-            .destroy_command_pool(self.data.command_pool, None);
-        self.device
-            .destroy_descriptor_set_layout(self.data.descriptor_set_layout, None);
-        self.device.destroy_device(None);
-        self.instance.destroy_surface_khr(self.data.surface, None);
-        if ENABLE_VALIDATION_LAYER {
-            self.instance
-                .destroy_debug_utils_messenger_ext(self.data.messenger, None);
-        }
-
-        self.instance.destroy_instance(None);
-
-        Ok(())
     }
 }
 
@@ -854,7 +883,7 @@ fn main() -> Result<()> {
         .build(&event_loop)?;
     window.set_cursor_visible(true);
 
-    let mut engine = unsafe { Engine::create(&window)? };
+    let mut engine = unsafe { Engine::new(&window)? };
     let (mut destroyed, mut minimized) = (false, false);
 
     event_loop.run(move |event, target| {
