@@ -5,8 +5,9 @@ use super::{
     buffer::{create_index_buffer, create_vertex_buffer, UniformBufferObject},
     camera::Camera,
     command_buffers::create_command_pool,
+    frame_rate_limiter::FrameRateLimiter,
     gui::{EguiTheme, Integration as GuiIntegration},
-    mesh::{gltf::load_gltf_meshes, DrawPushConstants, MeshBuffers},
+    mesh::{gltf::Gltf, loader::Loader, DrawPushConstants, MeshBuffers},
     texture::{create_texture_image, create_texture_image_view, create_texture_sampler},
     vertex::Vertex,
     Mat4,
@@ -15,7 +16,6 @@ use anyhow::{anyhow, Result};
 use cgmath::{point3, vec3, Deg};
 use egui::{FontDefinitions, Style};
 use engine_data::EngineData;
-use minstant::Instant;
 use std::{
     mem::size_of,
     path::Path,
@@ -53,11 +53,8 @@ pub struct Engine {
     pub device: Device,
     pub frame: usize,
     pub resized: bool,
-    // Number of seconds since the last loop
-    pub last_frame_time: Instant,
-    // Number of seconds since the last frame
-    pub last_update_time: Instant,
     pub camera: Camera,
+    pub frame_rate_limiter: FrameRateLimiter,
 }
 
 impl Engine {
@@ -132,6 +129,9 @@ impl Engine {
         data.theme = Some(EguiTheme::Dark);
         data.egui_integration = Some(egui_integration);
 
+        // TODO: Set from GUI
+        let frame_rate_limiter = FrameRateLimiter::new(Some(1.0 / 60.0));
+
         let mut engine = Self {
             _entry: entry,
             instance,
@@ -139,13 +139,16 @@ impl Engine {
             device,
             frame: 0,
             resized: false,
-            last_frame_time: Instant::now(),
-            last_update_time: Instant::now(),
             camera,
+            frame_rate_limiter,
         };
 
-        // TODO: Proper scene rendering
-        load_gltf_meshes(&mut engine, Path::new("./assets/basicmesh.glb"))?;
+        let meshes = Loader::<Gltf>::load(
+            &engine.data.mesh_loader,
+            &engine,
+            Path::new("./assets/basicmesh.glb"),
+        )?;
+        engine.data.meshes = meshes;
 
         Ok(engine)
     }
@@ -186,11 +189,8 @@ impl Engine {
         Ok(())
     }
 
-    pub unsafe fn upload_mesh(
-        &mut self,
-        indices: &[u32],
-        vertices: &[Vertex],
-    ) -> Result<MeshBuffers> {
+    /// Create a [MeshBuffers]
+    pub unsafe fn create_mesh(&self, indices: &[u32], vertices: &[Vertex]) -> Result<MeshBuffers> {
         let (index_buffer_size, vertex_buffer_size) = (
             std::mem::size_of_val(indices) as vk::DeviceSize,
             std::mem::size_of_val(vertices) as vk::DeviceSize,
@@ -358,6 +358,10 @@ impl Engine {
 
     /// Render a frame.
     pub unsafe fn render(&mut self, window: &Window) -> Result<()> {
+        if !self.frame_rate_limiter.render() {
+            return Ok(());
+        }
+
         let in_flight_fence = self.data.in_flight_fences[self.frame];
         self.device
             .wait_for_fences(&[in_flight_fence], true, u64::MAX)?;

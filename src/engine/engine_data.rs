@@ -6,7 +6,7 @@ use crate::{
     device::{check_physical_device, get_max_msaa_samples, QueueFamilyIndices, DEVICE_EXTENSIONS},
     gui::{EguiTheme, Integration},
     image::{create_image, create_image_view, get_depth_format},
-    mesh::{DrawPushConstants, MeshAsset},
+    mesh::{loader::MeshLoader, DrawPushConstants, MeshAsset},
     swapchain::{
         get_swapchain_extent, get_swapchain_present_mode, get_swapchain_surface_format,
         SwapchainSupport,
@@ -84,6 +84,7 @@ pub struct EngineData {
     pub depth_image_memory: vk::DeviceMemory,
     pub depth_image_view: vk::ImageView,
     // Meshes
+    pub mesh_loader: MeshLoader,
     pub meshes: Vec<MeshAsset>,
     // Texture
     pub mip_levels: u32,

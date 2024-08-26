@@ -1,12 +1,14 @@
 // TODO:- Custom build to automatically compile shaders when compiling the program
 //      - Check pub/private code
 //      - Docstring
+//      - unsafe code handling
 
 mod buffer;
 mod camera;
 mod command_buffers;
 mod device;
 mod engine;
+mod frame_rate_limiter;
 mod gui;
 mod image;
 mod mesh;
@@ -19,13 +21,12 @@ use cgmath::{Matrix4, Vector2, Vector3, Vector4};
 use device::QueueFamilyIndices;
 use engine::Engine;
 use log::error;
-use minstant::Instant;
 use winit::{
     dpi::LogicalSize,
     event::{Event, KeyEvent, StartCause, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
     keyboard::{Key, NamedKey},
-    window::{Window, WindowBuilder},
+    window::WindowBuilder,
 };
 
 pub type Point3 = cgmath::Point3<f32>;
@@ -33,23 +34,6 @@ pub type Vec2 = Vector2<f32>;
 pub type Vec3 = Vector3<f32>;
 pub type Vec4 = Vector4<f32>;
 pub type Mat4 = Matrix4<f32>;
-
-// TODO: Create a FrameLimiter object + menu in GUI
-fn render(engine: &mut Engine, window: &Window) -> Result<()> {
-    /// Limit the number of frames
-    const FRAME_CAP: f32 = 1.0 / 60.0;
-
-    let now = Instant::now();
-    // Use delta time time if necessary (for physics, tweening, etc.)
-    let _delta_time = (now - engine.last_update_time).as_secs_f32();
-    if (now - engine.last_frame_time).as_secs_f32() >= FRAME_CAP {
-        unsafe { engine.render(window) }?;
-        engine.last_frame_time = now;
-    }
-    engine.last_update_time = now;
-
-    Ok(())
-}
 
 fn main() -> Result<()> {
     pretty_env_logger::init();
@@ -81,7 +65,7 @@ fn main() -> Result<()> {
                     WindowEvent::RedrawRequested
                         if !minimized && !destroyed && !target.exiting() =>
                     {
-                        if let Err(err) = render(&mut engine, &window) {
+                        if let Err(err) = unsafe { engine.render(&window) } {
                             error!("Cannot render frame: {err}");
                             unsafe {
                                 if let Err(err) = engine.destroy() {

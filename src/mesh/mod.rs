@@ -1,4 +1,5 @@
 pub mod gltf;
+pub mod loader;
 pub mod obj;
 
 use crate::{buffer::BufferAllocation, Mat4};
@@ -12,6 +13,7 @@ pub struct MeshBuffers {
 }
 
 impl MeshBuffers {
+    /// Constructor
     #[inline]
     pub fn new(index_buffer: BufferAllocation, vertex_buffer: BufferAllocation) -> Self {
         Self {
@@ -39,6 +41,8 @@ impl DrawPushConstants {
     }
 }
 
+// TODO: Come up with better definition
+/// Holds `sub_mesh` information (`start_index` and `count`) necessary for rendering
 #[derive(Default)]
 pub struct GeoSurface {
     pub start_index: u32,
@@ -46,11 +50,13 @@ pub struct GeoSurface {
 }
 
 impl GeoSurface {
+    /// Constructor
     pub fn new(start_index: u32, count: u32) -> Self {
         Self { start_index, count }
     }
 }
 
+/// Holds information necessary to render a mesh.
 #[derive(Default)]
 pub struct MeshAsset {
     pub name: String,
