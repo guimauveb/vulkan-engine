@@ -5,6 +5,7 @@ use super::{
 use crate::{engine::Engine, vertex::Vertex};
 use anyhow::Result;
 use cgmath::{vec2, vec3, vec4};
+use gltf::{mesh::Reader, Buffer};
 use log::error;
 use std::path::Path;
 
@@ -29,77 +30,23 @@ impl Loader<Gltf> for MeshLoader {
                     error!("Mesh indices accessor not provided");
                     continue;
                 };
-                let initial_vtx = vertices.len();
 
                 let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
-                // Load indices
-                {
-                    if let Some(read_indices) = reader.read_indices() {
-                        for index in read_indices.into_u32() {
-                            indices.push(index + initial_vtx as u32);
-                        }
-                    }
+                let initial_vtx = vertices.len();
+
+                load_indices(&reader, &mut indices, initial_vtx as u32);
+                load_vertex_positions(&reader, &mut vertices, initial_vtx);
+                load_vertex_normals(&reader, &mut vertices, initial_vtx);
+                load_uvs(&reader, &mut vertices, initial_vtx);
+                load_vertex_colors(&reader, &mut vertices, initial_vtx);
+
+                // TODO: Manage this flag through the GUI
+                let replace_colors = false;
+                if replace_colors {
+                    override_colors(&mut vertices);
                 }
 
-                // Load vertex positions
-                {
-                    if let Some(positions) = reader.read_positions() {
-                        for (index, position) in positions.enumerate() {
-                            let vertex = Vertex::new(
-                                position.into(),
-                                vec4(1., 1., 1., 1.),
-                                vec2(0., 0.),
-                                vec3(1., 0., 0.),
-                            );
-                            match vertices.get_mut(initial_vtx + index) {
-                                Some(entry) => {
-                                    *entry = vertex;
-                                }
-                                None => {
-                                    vertices.push(vertex);
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Load vertex normals
-                {
-                    if let Some(normals) = reader.read_normals() {
-                        for (index, normal) in normals.enumerate() {
-                            vertices[initial_vtx + index].normal = normal.into();
-                        }
-                    }
-                }
-
-                // Load UVs
-                {
-                    if let Some(iter) = reader.read_tex_coords(0) {
-                        for (index, tex_coord) in iter.into_f32().enumerate() {
-                            vertices[initial_vtx + index].uv_x = tex_coord[0];
-                            vertices[initial_vtx + index].uv_y = tex_coord[1];
-                        }
-                    }
-                }
-
-                // Load vertex colors
-                if let Some(iter) = reader.read_colors(0) {
-                    for (index, color) in iter.into_rgba_f32().enumerate() {
-                        vertices[initial_vtx + index].color = color.into();
-                    }
-                }
                 surfaces.push(new_surface);
-            }
-
-            // From vkguide.dev: "With the OverrideColors as a compile time flag, we override the vertex colors with the vertex normals which is useful for debugging."
-            // TODO: Manage this flag through the GUI
-            let override_colors = false;
-            if override_colors {
-                for vertex in &mut vertices {
-                    vertex.color[0] = vertex.normal[0];
-                    vertex.color[1] = vertex.normal[1];
-                    vertex.color[2] = vertex.normal[2];
-                }
             }
 
             unsafe {
@@ -114,5 +61,88 @@ impl Loader<Gltf> for MeshLoader {
         }
 
         Ok(meshes)
+    }
+}
+
+fn load_indices<'a, 's>(
+    reader: &Reader<'a, 's, impl Clone + Fn(Buffer<'a>) -> Option<&'s [u8]>>,
+    indices: &mut Vec<u32>,
+    initial_vtx: u32,
+) {
+    if let Some(read_indices) = reader.read_indices() {
+        for index in read_indices.into_u32() {
+            indices.push(index + initial_vtx);
+        }
+    }
+}
+
+fn load_vertex_positions<'a, 's>(
+    reader: &Reader<'a, 's, impl Clone + Fn(Buffer<'a>) -> Option<&'s [u8]>>,
+    vertices: &mut Vec<Vertex>,
+    initial_vtx: usize,
+) {
+    if let Some(positions) = reader.read_positions() {
+        for (index, position) in positions.enumerate() {
+            let vertex = Vertex::new(
+                position.into(),
+                vec4(1., 1., 1., 1.),
+                vec2(0., 0.),
+                vec3(1., 0., 0.),
+            );
+            match vertices.get_mut(initial_vtx + index) {
+                Some(entry) => {
+                    *entry = vertex;
+                }
+                None => {
+                    vertices.push(vertex);
+                }
+            }
+        }
+    }
+}
+
+fn load_vertex_normals<'a, 's>(
+    reader: &Reader<'a, 's, impl Fn(Buffer<'a>) -> Option<&'s [u8]> + Clone>,
+    vertices: &mut [Vertex],
+    initial_vtx: usize,
+) {
+    if let Some(normals) = reader.read_normals() {
+        for (index, normal) in normals.enumerate() {
+            vertices[initial_vtx + index].normal = normal.into();
+        }
+    }
+}
+
+fn load_uvs<'a, 's>(
+    reader: &Reader<'a, 's, impl Fn(Buffer<'a>) -> Option<&'s [u8]> + Clone>,
+    vertices: &mut [Vertex],
+    initial_vtx: usize,
+) {
+    if let Some(iter) = reader.read_tex_coords(0) {
+        for (index, tex_coord) in iter.into_f32().enumerate() {
+            vertices[initial_vtx + index].uv_x = tex_coord[0];
+            vertices[initial_vtx + index].uv_y = tex_coord[1];
+        }
+    }
+}
+
+fn load_vertex_colors<'a, 's>(
+    reader: &Reader<'a, 's, impl Fn(Buffer<'a>) -> Option<&'s [u8]> + Clone>,
+    vertices: &mut [Vertex],
+    initial_vtx: usize,
+) {
+    if let Some(iter) = reader.read_colors(0) {
+        for (index, color) in iter.into_rgba_f32().enumerate() {
+            vertices[initial_vtx + index].color = color.into();
+        }
+    }
+}
+
+// From vkguide.dev: "With the OverrideColors as a compile time flag, we override the vertex colors with the vertex normals which is useful for debugging."
+fn override_colors(vertices: &mut [Vertex]) {
+    for vertex in vertices {
+        vertex.color[0] = vertex.normal[0];
+        vertex.color[1] = vertex.normal[1];
+        vertex.color[2] = vertex.normal[2];
     }
 }

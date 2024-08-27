@@ -4,7 +4,6 @@ use super::{
 use crate::{
     buffer::{BufferAllocation, UniformBufferObject},
     device::{check_physical_device, get_max_msaa_samples, QueueFamilyIndices, DEVICE_EXTENSIONS},
-    gui::{EguiTheme, Integration},
     image::{create_image, create_image_view, get_depth_format},
     mesh::{loader::MeshLoader, DrawPushConstants, MeshAsset},
     swapchain::{
@@ -51,7 +50,7 @@ extern "system" fn debug_callback(
 #[derive(Default)]
 pub struct EngineData {
     // Debug
-    pub messenger: vk::DebugUtilsMessengerEXT,
+    pub(super) messenger: vk::DebugUtilsMessengerEXT,
     // Surface
     pub surface: vk::SurfaceKHR,
     // Physical / Logical device
@@ -109,9 +108,6 @@ pub struct EngineData {
     pub render_finished_semaphores: Vec<vk::Semaphore>,
     pub in_flight_fences: Vec<vk::Fence>,
     pub images_in_flight: Vec<vk::Fence>,
-    // Gui
-    pub egui_integration: Option<Integration>,
-    pub theme: Option<EguiTheme>,
 }
 
 impl EngineData {

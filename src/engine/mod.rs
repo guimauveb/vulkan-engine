@@ -55,6 +55,9 @@ pub struct Engine {
     pub resized: bool,
     pub camera: Camera,
     pub frame_rate_limiter: FrameRateLimiter,
+    // Gui
+    pub gui_integration: Option<GuiIntegration>,
+    pub gui_theme: Option<EguiTheme>,
 }
 
 impl Engine {
@@ -109,8 +112,8 @@ impl Engine {
             data.swapchain_extent.height,
         );
 
-        // TODO: Move to EngineData
-        let egui_integration = GuiIntegration::new(
+        // TODO: Pass data instead of individual fields
+        let gui_integration = GuiIntegration::new(
             data.surface,
             data.swapchain_format,
             data.physical_device,
@@ -126,11 +129,6 @@ impl Engine {
             FontDefinitions::default(),
             Style::default(),
         )?;
-        data.theme = Some(EguiTheme::Dark);
-        data.egui_integration = Some(egui_integration);
-
-        // TODO: Set from GUI
-        let frame_rate_limiter = FrameRateLimiter::new(Some(1.0 / 60.0));
 
         let mut engine = Self {
             _entry: entry,
@@ -140,9 +138,13 @@ impl Engine {
             frame: 0,
             resized: false,
             camera,
-            frame_rate_limiter,
+            frame_rate_limiter: FrameRateLimiter::new(Some(1.0 / 60.0)),
+            gui_integration: Some(gui_integration),
+            gui_theme: Some(EguiTheme::Dark),
         };
 
+        // TODO: Avoid having to pass engine as ref and then settings the result back to
+        // egnine.data.meshes
         let meshes = Loader::<Gltf>::load(
             &engine.data.mesh_loader,
             &engine,
@@ -235,7 +237,7 @@ impl Engine {
         }
         let command_buffer = command_buffers[model_index];
 
-        let world_matrix = Mat4::from_angle_y(Deg(-90.0)) * Mat4::from_angle_x(Deg(-90.0));
+        let world_matrix = Mat4::from_angle_y(Deg(-90.0));
         let push_constants = DrawPushConstants::new(
             world_matrix,
             self.data.meshes[2].mesh_buffers.vertex_buffer.address(),
@@ -436,7 +438,7 @@ impl Engine {
     /// This method releases vk objects memory that is not managed by Rust.
     pub unsafe fn destroy(&mut self) -> Result<()> {
         self.device.device_wait_idle()?;
-        if let Some(gui) = self.data.egui_integration.as_mut() {
+        if let Some(gui) = self.gui_integration.as_mut() {
             gui.destroy();
         }
         self.destroy_swapchain();
@@ -521,7 +523,7 @@ impl Engine {
             self.data.swapchain_extent.height,
         );
 
-        if let Some(egui) = self.data.egui_integration.as_mut() {
+        if let Some(egui) = self.gui_integration.as_mut() {
             egui.recreate_swapchain(
                 self.data.swapchain_extent.width,
                 self.data.swapchain_extent.height,
@@ -572,10 +574,9 @@ impl Engine {
         image_index: usize,
         window: &Window,
     ) -> Result<()> {
-        if let (Some(egui_integration), Some(theme)) = (
-            self.data.egui_integration.as_mut(),
-            self.data.theme.as_mut(),
-        ) {
+        if let (Some(egui_integration), Some(theme)) =
+            (self.gui_integration.as_mut(), self.gui_theme.as_mut())
+        {
             match theme {
                 EguiTheme::Dark => egui_integration
                     .context()

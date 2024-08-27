@@ -57,7 +57,7 @@ fn main() -> Result<()> {
                 window.request_redraw();
             }
             Event::WindowEvent { event, .. } => {
-                if let Some(gui) = engine.data.egui_integration.as_mut() {
+                if let Some(gui) = engine.gui_integration.as_mut() {
                     _ = gui.handle_event(&window, &event);
                 }
 
