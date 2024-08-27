@@ -7,7 +7,7 @@ use super::{
     command_buffers::create_command_pool,
     frame_rate_limiter::FrameRateLimiter,
     gui::{EguiTheme, Integration as GuiIntegration},
-    mesh::{gltf::Gltf, loader::Loader, DrawPushConstants, MeshBuffers},
+    mesh::{gltf::GltfLoader, DrawPushConstants, MeshBuffers},
     texture::{create_texture_image, create_texture_image_view, create_texture_sampler},
     vertex::Vertex,
     Mat4,
@@ -145,11 +145,10 @@ impl Engine {
 
         // TODO: Avoid having to pass engine as ref and then settings the result back to
         // egnine.data.meshes
-        let meshes = Loader::<Gltf>::load(
-            &engine.data.mesh_loader,
-            &engine,
-            Path::new("./assets/basicmesh.glb"),
-        )?;
+        let meshes = engine
+            .data
+            .mesh_loader
+            .load_gltf(&engine, Path::new("./assets/basicmesh.glb"))?;
         engine.data.meshes = meshes;
 
         Ok(engine)

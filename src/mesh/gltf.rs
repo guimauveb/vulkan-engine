@@ -1,7 +1,4 @@
-use super::{
-    loader::{Loader, MeshLoader},
-    GeoSurface, MeshAsset,
-};
+use super::{loader::MeshLoader, GeoSurface, MeshAsset};
 use crate::{engine::Engine, vertex::Vertex};
 use anyhow::Result;
 use cgmath::{vec2, vec3, vec4};
@@ -9,11 +6,14 @@ use gltf::{mesh::Reader, Buffer};
 use log::error;
 use std::path::Path;
 
-/// [Loader] implementor for `glTF` meshes.
-pub struct Gltf;
+/// Trait a mesh loader must implement to load gLTF meshes
+pub trait GltfLoader {
+    /// Load gLTF meshes from a file.
+    fn load_gltf(&self, engine: &Engine, path: &Path) -> Result<Vec<MeshAsset>>;
+}
 
-impl Loader<Gltf> for MeshLoader {
-    fn load(&self, engine: &Engine, path: &Path) -> Result<Vec<MeshAsset>> {
+impl GltfLoader for MeshLoader {
+    fn load_gltf(&self, engine: &Engine, path: &Path) -> Result<Vec<MeshAsset>> {
         let (gltf, buffers, _) = gltf::import(path)?;
         // Reuse the same vectors for all meshes so that we do not allocate memory for every mesh
         let (mut meshes, mut indices, mut vertices) = (Vec::new(), Vec::new(), Vec::new());

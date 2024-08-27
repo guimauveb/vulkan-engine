@@ -1,3 +1,4 @@
+// TODO:
 #![allow(unused)]
 use crate::{
     buffer::{create_index_buffer, create_vertex_buffer},
@@ -10,17 +11,16 @@ use hashbrown::HashMap;
 use std::{fs::File, io::BufReader, mem::size_of, path::Path};
 use vulkanalia::{vk, Device, Instance};
 
-use super::{
-    loader::{Loader, MeshLoader},
-    MeshAsset,
-};
+use super::{loader::MeshLoader, MeshAsset};
 
-/// [Loader] implementor for `obj` meshes.
-pub struct Obj;
+/// Trait a mesh loader must implement to load obj meshes
+pub trait ObjLoader {
+    /// Load obj meshes from a file.
+    fn load_obj(&self, engine: &Engine, path: &Path) -> Result<Vec<MeshAsset>>;
+}
 
-impl Loader<Obj> for MeshLoader {
-    // TODO: Load meshes into a Vec<MeshAsset>
-    fn load(&self, engine: &Engine, path: &Path) -> Result<Vec<MeshAsset>> {
+impl ObjLoader for MeshLoader {
+    fn load_obj(&self, engine: &Engine, path: &Path) -> Result<Vec<MeshAsset>> {
         // let mut reader = BufReader::new(File::open("resources/viking_room.obj")?);
         // let (models, _) = tobj::load_obj_buf(
         //     &mut reader,
