@@ -22,7 +22,7 @@ impl FrameRateLimiter {
 
     // TODO: Set from GUI
     /// Update the frame cap
-    pub fn set_frame_cap(&mut self, frame_cap: Option<f32>) {
+    pub fn _set_frame_cap(&mut self, frame_cap: Option<f32>) {
         self.frame_cap = frame_cap;
     }
 

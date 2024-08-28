@@ -105,7 +105,7 @@ impl Engine {
         data.create_sync_objects(&device)?;
 
         let camera = Camera::new(
-            point3(0.0, 0.5, 2.5),
+            point3(0.0, 0.5, 7.0),
             vec3(0.0, 0.0, -1.0),
             vec3(0.0, 1.0, 0.0),
             data.swapchain_extent.width,
@@ -144,11 +144,11 @@ impl Engine {
         };
 
         // TODO: Avoid having to pass engine as ref and then settings the result back to
-        // egnine.data.meshes
+        // engine.data.meshes
         let meshes = engine
             .data
             .mesh_loader
-            .load_gltf(&engine, Path::new("./assets/basicmesh.glb"))?;
+            .load_gltf(&engine, Path::new("./assets/lantern.glb"))?;
         engine.data.meshes = meshes;
 
         Ok(engine)
@@ -239,7 +239,7 @@ impl Engine {
         let world_matrix = Mat4::from_angle_y(Deg(-90.0));
         let push_constants = DrawPushConstants::new(
             world_matrix,
-            self.data.meshes[2].mesh_buffers.vertex_buffer.address(),
+            self.data.meshes[0].mesh_buffers.vertex_buffer.address(),
         );
         let push_constants_bytes = slice::from_raw_parts(
             addr_of!(push_constants).cast::<u8>(),
@@ -271,7 +271,7 @@ impl Engine {
         );
         self.device.cmd_bind_index_buffer(
             command_buffer,
-            self.data.meshes[2].mesh_buffers.index_buffer.buffer,
+            self.data.meshes[0].mesh_buffers.index_buffer.buffer,
             0,
             vk::IndexType::UINT32,
         );
@@ -286,9 +286,9 @@ impl Engine {
 
         self.device.cmd_draw_indexed(
             command_buffer,
-            self.data.meshes[2].surfaces[0].count,
+            self.data.meshes[0].surfaces[0].count,
             1,
-            self.data.meshes[2].surfaces[0].start_index,
+            self.data.meshes[0].surfaces[0].start_index,
             0,
             0,
         );

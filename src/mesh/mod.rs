@@ -41,8 +41,7 @@ impl DrawPushConstants {
     }
 }
 
-// TODO: Come up with better definition
-/// Holds `sub_mesh` information (`start_index` and `count`) necessary for rendering
+/// Holds information about where a mesh starts and ends in a buffer
 #[derive(Default)]
 pub struct GeoSurface {
     pub start_index: u32,
@@ -59,16 +58,16 @@ impl GeoSurface {
 /// Holds information necessary to render a mesh.
 #[derive(Default)]
 pub struct MeshAsset {
-    pub name: String,
+    pub _name: String,
     pub surfaces: Vec<GeoSurface>,
     pub mesh_buffers: MeshBuffers,
 }
 
 impl MeshAsset {
     #[inline]
-    pub fn new(name: String, surfaces: Vec<GeoSurface>, mesh_buffers: MeshBuffers) -> Self {
+    pub fn new(_name: String, surfaces: Vec<GeoSurface>, mesh_buffers: MeshBuffers) -> Self {
         Self {
-            name,
+            _name,
             surfaces,
             mesh_buffers,
         }

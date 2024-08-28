@@ -5,14 +5,15 @@ use winit::{
     keyboard::{Key, NamedKey},
 };
 
+// TODO: - Set via GUI
 /// Camera speed
-const SPEED: f32 = 0.1;
+const SPEED: f32 = 0.3;
 /// Move the camera `EDGE_STEP`s towards the proper direction when the mouse is resting on one of the edges of the window.
 const EDGE_STEP: f32 = 1.0;
 /// Set the borders of the window to be `MARGIN` (pixels?) away from the actual borders.
 const MARGIN: f32 = 1.0;
 
-// TODO: Implement different types of cameras (FPS, TPS) that all implement a Camera trait
+// TODO: Reposition cursor in the middle when the cursor enters back into the viewport
 #[derive(Debug, Clone, Copy)]
 pub struct Camera {
     eye: Point3,
@@ -32,6 +33,10 @@ pub struct Camera {
 }
 
 impl Camera {
+    pub fn new(eye: Point3, target: Vec3, up: Vec3, width: u32, height: u32) -> Self {
+        Self::init(eye, target, up, width, height)
+    }
+
     fn init(eye: Point3, target: Vec3, up: Vec3, width: u32, height: u32) -> Self {
         let target = target.normalize();
         let up = up.normalize();
@@ -66,10 +71,6 @@ impl Camera {
         let direction = vec3(yaw_cos * pitch_cos, pitch_sin, yaw_sin * pitch_cos);
         self.target = direction.normalize();
         self.view = Mat4::look_at_rh(self.eye, self.eye + self.target, self.up);
-    }
-
-    pub fn new(eye: Point3, target: Vec3, up: Vec3, width: u32, height: u32) -> Self {
-        Self::init(eye, target, up, width, height)
     }
 
     pub fn on_keyboard(&mut self, key: Key) {

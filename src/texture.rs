@@ -164,7 +164,7 @@ pub unsafe fn create_texture_image(
     device: &Device,
     data: &mut EngineData,
 ) -> Result<()> {
-    let image = File::open("resources/viking_room.png")?;
+    let image = File::open("assets/lantern_base_color.png")?;
     let decoder = png::Decoder::new(image);
     let mut reader = decoder.read_info()?;
 
@@ -173,7 +173,7 @@ pub unsafe fn create_texture_image(
     reader.next_frame(&mut pixels)?;
 
     let (width, height) = reader.info().size();
-    if width != 1024 || height != 1024 || reader.info().color_type != png::ColorType::Rgba {
+    if reader.info().color_type != png::ColorType::Rgba {
         return Err(anyhow!("Invalid texture image"));
     }
 
