@@ -114,7 +114,7 @@ pub unsafe fn copy_buffer(
     Ok(())
 }
 
-// TODO: - To do on a dedicated thread
+// TODO: To do on a dedicated thread
 pub unsafe fn create_vertex_buffer(
     instance: &Instance,
     device: &Device,
@@ -167,7 +167,7 @@ pub unsafe fn create_vertex_buffer(
     Ok(vertex_buffer)
 }
 
-// TODO: - To do on a dedicated thread
+// TODO: To do on a dedicated thread
 pub unsafe fn create_index_buffer(
     instance: &Instance,
     device: &Device,

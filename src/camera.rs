@@ -1,3 +1,4 @@
+// TODO: Expose camera controls in GUI
 use super::{Mat4, Point3, Vec3};
 use cgmath::{vec3, Angle, Deg, InnerSpace};
 use winit::{
@@ -5,9 +6,10 @@ use winit::{
     keyboard::{Key, NamedKey},
 };
 
-// TODO: - Set via GUI
-/// Camera speed
-const SPEED: f32 = 0.3;
+/// Mouse camera speed
+const MOUSE_SPEED: f32 = 0.1;
+/// Keyboard camera speed
+const KEYBOARD_SPEED: f32 = 0.9;
 /// Move the camera `EDGE_STEP`s towards the proper direction when the mouse is resting on one of the edges of the window.
 const EDGE_STEP: f32 = 1.0;
 /// Set the borders of the window to be `MARGIN` (pixels?) away from the actual borders.
@@ -61,7 +63,6 @@ impl Camera {
     }
 
     fn update(&mut self) {
-        // TODO: Try rotating using rotations matrices and quaternions
         let (yaw_cos, yaw_sin, pitch_cos, pitch_sin) = (
             Deg(self.yaw).cos(),
             Deg(self.yaw).sin(),
@@ -94,22 +95,22 @@ impl Camera {
         match key {
             Key::Named(key) => match key {
                 NamedKey::ArrowUp => {
-                    self.eye += self.target * SPEED;
+                    self.eye += self.target * KEYBOARD_SPEED;
                     self.update();
                 }
                 NamedKey::ArrowDown => {
-                    self.eye -= self.target * SPEED;
+                    self.eye -= self.target * KEYBOARD_SPEED;
                     self.update();
                 }
                 NamedKey::ArrowLeft => {
                     let mut left = self.up.cross(self.target).normalize();
-                    left *= SPEED;
+                    left *= KEYBOARD_SPEED;
                     self.eye += left;
                     self.update();
                 }
                 NamedKey::ArrowRight => {
                     let mut right = self.target.cross(self.up).normalize();
-                    right *= SPEED;
+                    right *= KEYBOARD_SPEED;
                     self.eye += right;
                     self.update();
                 }
@@ -118,31 +119,31 @@ impl Camera {
 
             Key::Character(key) => match key.as_str() {
                 "w" => {
-                    self.eye += self.target * SPEED;
+                    self.eye += self.target * KEYBOARD_SPEED;
                     self.update();
                 }
                 "s" => {
-                    self.eye -= self.target * SPEED;
+                    self.eye -= self.target * KEYBOARD_SPEED;
                     self.update();
                 }
                 "a" => {
                     let mut left = self.up.cross(self.target).normalize();
-                    left *= SPEED;
+                    left *= KEYBOARD_SPEED;
                     self.eye += left;
                     self.update();
                 }
                 "d" => {
                     let mut right = self.target.cross(self.up).normalize();
-                    right *= SPEED;
+                    right *= KEYBOARD_SPEED;
                     self.eye += right;
                     self.update();
                 }
                 "q" => {
-                    self.eye += self.up * SPEED;
+                    self.eye += self.up * KEYBOARD_SPEED;
                     self.update();
                 }
                 "e" => {
-                    self.eye -= self.up * SPEED;
+                    self.eye -= self.up * KEYBOARD_SPEED;
                     self.update();
                 }
 
@@ -153,7 +154,6 @@ impl Camera {
         }
     }
 
-    // FIXME - Border detection
     pub fn on_mouse(&mut self, position: PhysicalPosition<f32>) {
         if !self.enabled {
             return;
@@ -166,33 +166,38 @@ impl Camera {
         self.mouse_position.x = position.x;
         self.mouse_position.y = position.y;
 
-        self.yaw += delta_x * SPEED;
-        self.pitch += delta_y * SPEED;
+        self.yaw += delta_x * MOUSE_SPEED;
+        self.pitch += delta_y * MOUSE_SPEED;
         self.pitch = self.pitch.clamp(-90.0, 90.0);
 
-        if delta_x == 0.0 {
-            if position.x <= MARGIN {
-                self.on_left_edge = true;
-            } else if position.x >= (self.width as f32 - MARGIN) {
-                self.on_right_edge = true;
-            }
-        } else {
-            self.on_left_edge = false;
-            self.on_right_edge = false;
-        }
-
-        if delta_y == 0.0 {
-            if position.y == 0.0 {
-                self.on_upper_edge = true;
-            } else if position.y == self.height as f32 {
-                self.on_lower_edge = true;
-            }
-        } else {
-            self.on_upper_edge = false;
-            self.on_lower_edge = false;
-        }
+        // self.on_border()
 
         self.update();
+    }
+
+    // FIXME - Border detection
+    fn on_border(&mut self, _position: PhysicalPosition<f32>) {
+        // if delta_x == 0.0 {
+        //     if position.x <= MARGIN {
+        //         self.on_left_edge = true;
+        //     } else if position.x >= (self.width as f32 - MARGIN) {
+        //         self.on_right_edge = true;
+        //     }
+        // } else {
+        //     self.on_left_edge = false;
+        //     self.on_right_edge = false;
+        // }
+
+        // if delta_y == 0.0 {
+        //     if position.y == 0.0 {
+        //         self.on_upper_edge = true;
+        //     } else if position.y == self.height as f32 {
+        //         self.on_lower_edge = true;
+        //     }
+        // } else {
+        //     self.on_upper_edge = false;
+        //     self.on_lower_edge = false;
+        // }
     }
 
     pub fn on_render(&mut self) {

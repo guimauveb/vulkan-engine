@@ -3,7 +3,7 @@ use crate::{engine::Engine, vertex::Vertex};
 use anyhow::Result;
 use cgmath::{vec2, vec3, vec4};
 use gltf::{mesh::Reader, Buffer};
-use log::error;
+use log::warn;
 use std::path::Path;
 
 /// Trait a mesh loader must implement to load gLTF meshes
@@ -27,7 +27,7 @@ impl GltfLoader for MeshLoader {
                 let new_surface = if let Some(p_indices) = primitive.indices() {
                     GeoSurface::new(indices.len() as u32, p_indices.count() as u32)
                 } else {
-                    error!("Mesh indices accessor not provided");
+                    warn!("Mesh indices accessor not provided");
                     continue;
                 };
 
@@ -65,7 +65,7 @@ impl GltfLoader for MeshLoader {
 }
 
 fn load_indices<'a, 's>(
-    reader: &Reader<'a, 's, impl Clone + Fn(Buffer<'a>) -> Option<&'s [u8]>>,
+    reader: &Reader<'a, 's, impl Fn(Buffer<'a>) -> Option<&'s [u8]> + Clone>,
     indices: &mut Vec<u32>,
     initial_vtx: u32,
 ) {
@@ -77,7 +77,7 @@ fn load_indices<'a, 's>(
 }
 
 fn load_vertex_positions<'a, 's>(
-    reader: &Reader<'a, 's, impl Clone + Fn(Buffer<'a>) -> Option<&'s [u8]>>,
+    reader: &Reader<'a, 's, impl Fn(Buffer<'a>) -> Option<&'s [u8]> + Clone>,
     vertices: &mut Vec<Vertex>,
     initial_vtx: usize,
 ) {

@@ -1,11 +1,13 @@
-// TODO:- Custom build to automatically compile shaders when compiling the program
-//      - Check pub/private code
-//      - Docstring
-//      - unsafe code handling
+// TODO: Custom build to automatically compile shaders when compiling the program
+//       unsafe code handling
+//       Check pub/private code
+//       Docstring
+//       Error handling
 
 mod buffer;
 mod camera;
 mod command_buffers;
+mod descriptor;
 mod device;
 mod engine;
 mod frame_rate_limiter;
