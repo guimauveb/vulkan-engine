@@ -1,6 +1,6 @@
 # Vulkan based engine (work in progress)
 
-A Vulkan 3D engine written in Rust and built using [vulkanalia](https://github.com/KyleMayes/vulkanalia) based on [vkguide.dev](https://vkguide.dev/).
+A Vulkan 3D engine written in Rust using [vulkanalia](https://github.com/KyleMayes/vulkanalia) and based on [vkguide.dev](https://vkguide.dev/).
 
 ![vulkan-engine](https://github.com/guimauveb/vulkan-engine/blob/master/screenshot.png?raw=true)
 
