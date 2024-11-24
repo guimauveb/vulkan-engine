@@ -136,7 +136,7 @@ fn load_images(engine: &mut Engine, images: Vec<ImageData>) -> Result<Vec<Alloca
                     Format::R8G8B8 => {
                         debug!("Converting image `R8G8B8` to `R8G8B8A8`");
                         // FIXME: Fix gpu rgb->rgba conversion
-                        // gpu_rgb_to_rgba(engine, image)?
+                        // _gpu_rgb_to_rgba(engine, image)?
                         rgb_to_rgba(engine, image)?
                     }
                     Format::R8 => {
@@ -148,7 +148,7 @@ fn load_images(engine: &mut Engine, images: Vec<ImageData>) -> Result<Vec<Alloca
                                         .depth(1)
                                         .build(),
                                 )
-                                .format(vk::Format::R8_UNORM)
+                                .format(vk::Format::R8_SRGB)
                                 .usage(
                                     vk::ImageUsageFlags::SAMPLED
                                         | vk::ImageUsageFlags::TRANSFER_SRC
@@ -418,7 +418,7 @@ fn load_meshes(
             load_vertex_colors(&reader, &mut vertices, initial_vtx);
 
             // TODO: Manage this flag through the GUI
-            let replace_colors = true;
+            let replace_colors = false;
             if replace_colors {
                 override_colors(&mut vertices);
             }
