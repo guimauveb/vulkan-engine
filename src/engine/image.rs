@@ -6,15 +6,36 @@ use vulkanalia::{
     vk::DeviceV1_3,
 };
 
-/// Write pixels into an image
+/// RGB to RGBA compute shader push constants
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct RgbToRgbaPushConstants {
+    pub image_width: u32,
+    pub image_height: u32,
+    pub in_rgb: vk::DeviceAddress,
+}
+
+impl RgbToRgbaPushConstants {
+    #[inline]
+    pub fn new(image_width: u32, image_height: u32, in_rgb: vk::DeviceAddress) -> Self {
+        Self {
+            image_width,
+            image_height,
+            in_rgb,
+        }
+    }
+}
+
+/// Write pixels into an [`AllocatedImage`]
 pub fn write_pixels_to_image<T>(
     interface: &VulkanInterface,
     immediate_submit: &ImmediateSubmit,
     pixels: *const T,
     allocated_image: &AllocatedImage,
+    channels: u32,
 ) -> Result<()> {
     let extent = allocated_image.image_extent;
-    let data_size: u64 = (extent.depth * extent.width * extent.height * 4).into();
+    let data_size: u64 = (extent.depth * extent.width * extent.height * channels).into();
     let staging_info = vk::BufferCreateInfo::builder()
         .size(data_size)
         .usage(vk::BufferUsageFlags::TRANSFER_SRC)
@@ -30,13 +51,9 @@ pub fn write_pixels_to_image<T>(
         "Staging buffer too small for pixel data: {data_size} > {}",
         staging_alloc.size
     );
-    let memory = staging_alloc.get_mapped_memory(&interface.device)?;
+    let memory = staging_alloc.mapped_memory::<T>(&interface.device)?;
     unsafe {
-        memcpy(
-            pixels,
-            memory.cast(),
-            usize::try_from(data_size)? / size_of::<T>(),
-        );
+        memcpy(pixels, memory, data_size as usize / size_of::<T>());
     }
     staging_alloc.unmap_memory(&interface.device);
 
@@ -123,8 +140,8 @@ pub fn copy_image_to_image(
     let src_offsets = [
         vk::Offset3D { x: 0, y: 0, z: 0 },
         vk::Offset3D {
-            x: src_size.width.try_into()?,
-            y: src_size.height.try_into()?,
+            x: src_size.width as i32,
+            y: src_size.height as i32,
             z: 1,
         },
     ];
@@ -134,8 +151,8 @@ pub fn copy_image_to_image(
         [
             vk::Offset3D { x: 0, y: 0, z: 0 },
             vk::Offset3D {
-                x: dst_size.width.try_into()?,
-                y: dst_size.height.try_into()?,
+                x: dst_size.width as i32,
+                y: dst_size.height as i32,
                 z: 1,
             },
         ]
@@ -161,10 +178,10 @@ pub fn copy_image_to_image(
         .dst_subresource(dst_subresources)
         .build()];
     let blit_info = vk::BlitImageInfo2::builder()
-        .dst_image(destination)
-        .dst_image_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
         .src_image(source)
         .src_image_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+        .dst_image(destination)
+        .dst_image_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
         .filter(vk::Filter::LINEAR)
         .regions(blit_regions)
         .build();

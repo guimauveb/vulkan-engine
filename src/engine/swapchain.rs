@@ -29,15 +29,15 @@ impl Swapchain {
     ) -> Result<Self> {
         let mut builder = SwapchainBuilder::new(interface, surface, indices)?;
         builder.set_format(vk::Format::R8G8B8A8_SRGB, vk::ColorSpaceKHR::SRGB_NONLINEAR);
-        // Using FIFO to limit the framerate to the monitor refresh rate (hard vsync)
-        builder.set_present_mode(vk::PresentModeKHR::FIFO);
+        // Use FIFO to limit the framerate to the monitor refresh rate (hard vsync)
+        builder.set_present_mode(vk::PresentModeKHR::MAILBOX);
         builder.set_extent(window);
 
         builder.build()
     }
 
-    /// Cleanup the associated resources
-    pub fn cleanup(&mut self, device: &Device) {
+    /// Destroy associated resources
+    pub fn destroy(&mut self, device: &Device) {
         unsafe {
             device.destroy_swapchain_khr(self.vk_swapchain, None);
             for view in self.views.drain(..) {

@@ -66,8 +66,8 @@ impl ImmediateSubmit {
         Ok(())
     }
 
-    /// Cleanup resources
-    pub fn cleanup(&self, device: &Device) {
+    /// Destroy resources
+    pub fn destroy(&self, device: &Device) {
         unsafe {
             device.destroy_command_pool(self.cmd_pool, None);
             device.destroy_fence(self.fence, None);

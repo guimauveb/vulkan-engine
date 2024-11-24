@@ -2,13 +2,14 @@ use super::{
     commands::ImmediateSubmit,
     descriptors::{DescriptorAllocator, DescriptorLayoutBuilder, DescriptorWriter, PoolSizeRatio},
     image::{copy_image_to_image, transition_image, write_pixels_to_image},
-    memory::{AllocatedImage, AllocatedImageInfo, Allocation},
+    memory::{AllocatedImage, AllocatedImageInfo},
+    meshes::MeshAllocations,
     pipelines::{GraphicsPipelineBuilder, Pipeline},
     swapchain::Swapchain,
     Engine, Vec2, Vec4, VulkanInterface, ALLOCATOR,
 };
 use anyhow::{anyhow, Result};
-use cgmath::{vec2, vec4};
+use cgmath::vec2;
 use egui::{
     epaint::{image::ImageDelta, Primitive},
     ClippedPrimitive, Context, FontDefinitions, FullOutput, ImageData, Pos2, Style, TextureId,
@@ -28,12 +29,15 @@ use std::{
 use vulkanalia::{
     prelude::v1_3::{vk, DeviceV1_0, HasBuilder},
     vk::DeviceV1_3,
-    Device,
 };
 
 impl Engine {
-    /// Update [`egui`] integration
-    pub fn draw_gui(&mut self, cmd_buffer: vk::CommandBuffer, image_index: usize) -> Result<()> {
+    /// Update [`egui`] [`Integration`]
+    pub(crate) fn draw_gui(
+        &mut self,
+        cmd_buffer: vk::CommandBuffer,
+        image_index: usize,
+    ) -> Result<()> {
         if let (Some(gui), Some(theme)) = (self.gui.as_mut(), self.gui_theme.as_mut()) {
             match theme {
                 EguiTheme::Dark => gui.context().set_visuals(egui::style::Visuals::dark()),
@@ -41,7 +45,7 @@ impl Engine {
             }
 
             gui.begin_frame(&self.window);
-            egui::SidePanel::left("my_side_panel").show(gui.context(), |ui| {
+            egui::SidePanel::left("left_side_panel").show(gui.context(), |ui| {
                 ui.heading("vulkan-engine");
                 ui.label("v0.1.0");
                 ui.separator();
@@ -57,7 +61,7 @@ impl Engine {
                 });
                 ui.separator();
             });
-            egui::Window::new("Window 1")
+            egui::Window::new("Window theme")
                 .resizable(true)
                 .scroll2([true, true])
                 .show(gui.context(), |ui| {
@@ -137,13 +141,10 @@ pub struct Integration {
     pipeline: Pipeline,
     sampler: vk::Sampler,
     immediate_submit: ImmediateSubmit,
-    descriptor_allocator: DescriptorAllocator,
+    descriptor_pool: DescriptorAllocator,
     descriptor_writer: DescriptorWriter,
     allocations: Vec<MeshAllocations>,
-    // TODO: Group texture data into a single struct
-    texture_descriptor_sets: HashMap<TextureId, vk::DescriptorSet>,
-    texture_images: HashMap<TextureId, AllocatedImage>,
-    texture_image_infos: HashMap<TextureId, AllocatedImageInfo>,
+    textures: HashMap<TextureId, Texture>,
     texture_layout: vk::DescriptorSetLayout,
     user_textures: Vec<Option<vk::DescriptorSet>>,
 }
@@ -255,15 +256,12 @@ impl Integration {
                 ),
             );
         }
+
         self.draw_meshes(interface, cmd_buffer, clipped_meshes, allocations)?;
 
         for &id in &textures_delta.free {
             // Descriptor set is destroyed with the descriptor pool
-            self.texture_descriptor_sets.remove_entry(&id);
-            self.texture_image_infos.remove_entry(&id);
-            if let Some((_, image)) = self.texture_images.remove_entry(&id) {
-                ALLOCATOR.deallocate_image(&interface.device, image);
-            }
+            self.textures.remove_entry(&id);
         }
 
         Ok(())
@@ -276,7 +274,7 @@ impl Integration {
         clipped_meshes: Vec<ClippedPrimitive>,
         allocations: MeshAllocations,
     ) -> Result<()> {
-        let mut staging_memory = allocations.get_staging_memory(&interface.device)?;
+        let mut staging_memory = allocations.staging_memory(&interface.device)?;
         let (mut vertex_size, mut index_size) = (0, 0);
         let (mut vertex_base, mut index_base) = (0, 0);
         for ClippedPrimitive {
@@ -289,7 +287,7 @@ impl Integration {
                 Primitive::Callback(_) => {
                     return Err(anyhow!(
                         "`Primitive::Callback(_)` primitive not implemented"
-                    ))
+                    ));
                 }
             };
             let (vertices, indices) = (
@@ -303,9 +301,6 @@ impl Integration {
                 continue;
             }
 
-            vertex_size += size_of_val(&vertices[..]);
-            index_size += size_of_val(&indices[..]);
-
             let descriptor_set = if let TextureId::User(id) = mesh.texture_id {
                 if let Some(descriptor_set) = self.user_textures[id as usize] {
                     descriptor_set
@@ -317,15 +312,10 @@ impl Integration {
                     continue;
                 }
             } else {
-                *self
-                    .texture_descriptor_sets
+                self.textures
                     .get(&mesh.texture_id)
-                    .ok_or_else(|| {
-                        anyhow!(
-                            "Descriptor set for texture id '{:?}` not found",
-                            mesh.texture_id
-                        )
-                    })?
+                    .map(|t| t.descriptor_set)
+                    .ok_or_else(|| anyhow!("Texture '{:?}` not found", mesh.texture_id))?
             };
             unsafe {
                 interface.device.cmd_bind_descriptor_sets(
@@ -338,12 +328,6 @@ impl Integration {
                 );
             }
 
-            let mesh_data_size = vertex_size + index_size;
-            debug_assert!(
-                allocations.staging.size >= u64::try_from(mesh_data_size)?,
-                "Staging buffer too small for mesh data: {mesh_data_size} > {}",
-                allocations.staging.size,
-            );
             // Copy vertices and indices into the staging buffer
             unsafe {
                 memcpy(vertices.as_ptr(), staging_memory.vertices, vertices.len());
@@ -352,43 +336,25 @@ impl Integration {
                 staging_memory.indices = staging_memory.indices.add(indices.len());
             }
 
+            let clamp_pos = |pos: Pos2, min_x, min_y| Pos2 {
+                x: f32::clamp(pos.x * self.scale_factor, min_x, self.extent.width as f32),
+                y: f32::clamp(pos.y * self.scale_factor, min_y, self.extent.height as f32),
+            };
+            let min = clamp_pos(clip_rect.min, 0.0, 0.0);
+            let max = clamp_pos(clip_rect.max, min.x, min.y);
+            let scissor = vk::Rect2D {
+                offset: vk::Offset2D {
+                    x: min.x.round() as i32,
+                    y: min.y.round() as i32,
+                },
+                extent: vk::Extent2D {
+                    width: (max.x.round() - min.x) as u32,
+                    height: (max.y.round() - min.y) as u32,
+                },
+            };
             // Record draw commands
-            let min = clip_rect.min;
-            let min = Pos2 {
-                x: min.x * self.scale_factor,
-                y: min.y * self.scale_factor,
-            };
-            let min = Pos2 {
-                x: f32::clamp(min.x, 0.0, self.extent.width as f32),
-                y: f32::clamp(min.y, 0.0, self.extent.height as f32),
-            };
-            let max = clip_rect.max;
-            let max = Pos2 {
-                x: max.x * self.scale_factor,
-                y: max.y * self.scale_factor,
-            };
-            let max = Pos2 {
-                x: f32::clamp(max.x, min.x, self.extent.width as f32),
-                y: f32::clamp(max.y, min.y, self.extent.height as f32),
-            };
             unsafe {
-                interface.device.cmd_set_scissor(
-                    cmd_buffer,
-                    0,
-                    &[vk::Rect2D::builder()
-                        .offset(
-                            vk::Offset2D::builder()
-                                .x(min.x.round() as i32)
-                                .y(min.y.round() as i32)
-                                .build(),
-                        )
-                        .extent(
-                            vk::Extent2D::builder()
-                                .width((max.x.round() - min.x) as u32)
-                                .height((max.y.round() - min.y) as u32)
-                                .build(),
-                        )],
-                );
+                interface.device.cmd_set_scissor(cmd_buffer, 0, &[scissor]);
                 interface.device.cmd_draw_indexed(
                     cmd_buffer,
                     indices.len() as u32,
@@ -399,6 +365,8 @@ impl Integration {
                 );
             }
 
+            vertex_size += size_of_val(&vertices[..]);
+            index_size += size_of_val(&indices[..]);
             vertex_base += vertices.len() as i32;
             index_base += indices.len() as u32;
         }
@@ -406,7 +374,7 @@ impl Integration {
         // Copy from staging to destination buffers
         let copy = |cmd_buffer: vk::CommandBuffer| {
             let vertex_copy = vk::BufferCopy::builder()
-                .size(vertex_size.try_into()?)
+                .size(vertex_size as vk::DeviceSize)
                 .build();
             unsafe {
                 interface.device.cmd_copy_buffer(
@@ -418,7 +386,7 @@ impl Integration {
             }
             let index_copy = vk::BufferCopy::builder()
                 .src_offset(VERTEX_BUFFER_SIZE)
-                .size(index_size.try_into()?)
+                .size(index_size as vk::DeviceSize)
                 .build();
             unsafe {
                 interface.device.cmd_copy_buffer(
@@ -465,12 +433,12 @@ impl Integration {
         let new_texture_info = AllocatedImageInfo::default()
             .extent(
                 vk::Extent3D::builder()
-                    .width(delta.image.width().try_into()?)
-                    .height(delta.image.height().try_into()?)
+                    .width(delta.image.width() as u32)
+                    .height(delta.image.height() as u32)
                     .depth(1)
                     .build(),
             )
-            .format(vk::Format::R8G8B8A8_SRGB)
+            .format(vk::Format::R8G8B8A8_UNORM)
             .usage(
                 vk::ImageUsageFlags::SAMPLED
                     | vk::ImageUsageFlags::TRANSFER_SRC
@@ -483,28 +451,22 @@ impl Integration {
             &self.immediate_submit,
             pixels.as_ptr(),
             &new_texture,
+            4,
         )?;
         // Texture is now in GPU memory, now we need to decide whether we should register it as new or update existing.
         // TODO: Test this branch
         if let Some(position) = delta.pos {
             // Blit new texture data to existing texture if delta pos exists (e.g. font changed)
-            if let Some(existing_texture) = self.texture_images.get(&texture_id) {
-                let existing_texture_info = self
-                    .texture_image_infos
-                    .get(&texture_id)
-                    .ok_or_else(|| anyhow!("Missing texture image info"))?;
-                blit_new_texture(
+            if let Some(existing_texture) = self.textures.get_mut(&texture_id) {
+                existing_texture.blit_new_texture(
                     interface,
                     cmd_buffer,
-                    existing_texture,
-                    existing_texture_info,
                     &new_texture,
                     &new_texture_info,
                     position,
                     delta,
                 )?;
-                self.texture_image_infos
-                    .insert(texture_id, new_texture_info);
+                existing_texture.image_info = new_texture_info;
                 // Destroy texture image
                 ALLOCATOR.deallocate_image(&interface.device, new_texture);
             } else {
@@ -514,7 +476,7 @@ impl Integration {
         } else {
             // Update descriptor set
             let descriptor_set = self
-                .descriptor_allocator
+                .descriptor_pool
                 .allocate(&interface.device, self.texture_layout)?;
             self.descriptor_writer.write_image(
                 0,
@@ -527,9 +489,10 @@ impl Integration {
                 .update_set(&interface.device, descriptor_set);
             self.descriptor_writer.clear();
             // Register new texture
-            self.texture_images.insert(texture_id, new_texture);
-            self.texture_descriptor_sets
-                .insert(texture_id, descriptor_set);
+            self.textures.insert(
+                texture_id,
+                Texture::new(descriptor_set, new_texture, new_texture_info),
+            );
         }
 
         Ok(())
@@ -540,100 +503,128 @@ impl Integration {
         self.extent = extent;
     }
 
-    /// Destroy the GUI
+    /// Destroy GUI resources
     pub fn destroy(&mut self, interface: &VulkanInterface) {
         // Destroy pipeline
-        self.pipeline.cleanup(&interface.device);
+        self.pipeline.destroy(&interface.device);
         // Destroy descriptor resources
-        self.descriptor_allocator.destroy_pools(&interface.device);
+        self.descriptor_pool.destroy_pools(&interface.device);
         unsafe {
             interface
                 .device
                 .destroy_descriptor_set_layout(self.texture_layout, None);
         }
         // Destroy immediate submit resources
-        self.immediate_submit.cleanup(&interface.device);
+        self.immediate_submit.destroy(&interface.device);
         // Destroy vertex and index buffers
         for allocations in self.allocations.drain(..) {
-            allocations.cleanup(&interface.device);
+            allocations.destroy(&interface.device);
         }
         // Destroy sampler
         unsafe {
             interface.device.destroy_sampler(self.sampler, None);
         }
         // Destroy images
-        for (_, texture_image) in self.texture_images.drain() {
-            ALLOCATOR.deallocate_image(&interface.device, texture_image);
+        for (_, texture) in self.textures.drain() {
+            texture.destroy(interface);
         }
     }
 }
 
-/// Blit new texture data to existing texture
-#[allow(clippy::too_many_arguments)]
-fn blit_new_texture(
-    interface: &VulkanInterface,
-    cmd_buffer: vk::CommandBuffer,
-    existing_texture: &AllocatedImage,
-    existing_texture_info: &AllocatedImageInfo,
-    new_texture: &AllocatedImage,
-    new_texture_info: &AllocatedImageInfo,
-    position: [usize; 2],
-    delta: ImageDelta,
-) -> Result<()> {
-    // Transition existing image for transfer dst
-    transition_image(
-        &interface.device,
-        cmd_buffer,
-        existing_texture.image,
-        vk::ImageLayout::UNDEFINED,
-        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-    );
-    // Transition new image for transfer src
-    transition_image(
-        &interface.device,
-        cmd_buffer,
-        new_texture.image,
-        vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-        vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
-    );
-    let top_left = vk::Offset3D {
-        x: position[0] as i32,
-        y: position[1] as i32,
-        z: 0,
-    };
-    let bottom_right = vk::Offset3D {
-        x: position[0] as i32 + delta.image.width() as i32,
-        y: position[1] as i32 + delta.image.height() as i32,
-        z: 1,
-    };
-    // Copy new texture to existing one
-    copy_image_to_image(
-        &interface.device,
-        cmd_buffer,
-        new_texture.image,
-        existing_texture.image,
-        vk::Extent2D {
-            width: new_texture_info.extent.width,
-            height: new_texture_info.extent.height,
-        },
-        vk::Extent2D {
-            width: existing_texture_info.extent.width,
-            height: existing_texture_info.extent.height,
-        },
-        Some([top_left, bottom_right]),
-    )?;
-    // Transition existing image for shader read
-    transition_image(
-        &interface.device,
-        cmd_buffer,
-        existing_texture.image,
-        vk::ImageLayout::TRANSFER_DST_OPTIMAL,
-        vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-    );
-
-    Ok(())
+/// GUI texture
+struct Texture {
+    descriptor_set: vk::DescriptorSet,
+    image: AllocatedImage,
+    image_info: AllocatedImageInfo,
 }
 
+impl Texture {
+    /// Constructor
+    #[inline]
+    fn new(
+        descriptor_set: vk::DescriptorSet,
+        image: AllocatedImage,
+        image_info: AllocatedImageInfo,
+    ) -> Self {
+        Self {
+            descriptor_set,
+            image,
+            image_info,
+        }
+    }
+
+    /// Blit new texture data to this texture
+    fn blit_new_texture(
+        &self,
+        interface: &VulkanInterface,
+        cmd_buffer: vk::CommandBuffer,
+        new_texture: &AllocatedImage,
+        new_texture_info: &AllocatedImageInfo,
+        position: [usize; 2],
+        delta: ImageDelta,
+    ) -> Result<()> {
+        // Transition existing image for transfer dst
+        transition_image(
+            &interface.device,
+            cmd_buffer,
+            self.image.image,
+            vk::ImageLayout::UNDEFINED,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+        );
+        // Transition new image for transfer src
+        transition_image(
+            &interface.device,
+            cmd_buffer,
+            new_texture.image,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+        );
+        let top_left = vk::Offset3D {
+            x: position[0] as i32,
+            y: position[1] as i32,
+            z: 0,
+        };
+        let bottom_right = vk::Offset3D {
+            x: position[0] as i32 + delta.image.width() as i32,
+            y: position[1] as i32 + delta.image.height() as i32,
+            z: 1,
+        };
+        // Copy new texture to existing one
+        copy_image_to_image(
+            &interface.device,
+            cmd_buffer,
+            new_texture.image,
+            self.image.image,
+            vk::Extent2D {
+                width: new_texture_info.extent.width,
+                height: new_texture_info.extent.height,
+            },
+            vk::Extent2D {
+                width: self.image_info.extent.width,
+                height: self.image_info.extent.height,
+            },
+            Some([top_left, bottom_right]),
+        )?;
+        // Transition existing image for shader read
+        transition_image(
+            &interface.device,
+            cmd_buffer,
+            self.image.image,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        );
+
+        Ok(())
+    }
+
+    /// Destroy the resources
+    fn destroy(&self, interface: &VulkanInterface) {
+        // Descriptor sets are destroyed with the descriptor pool
+        ALLOCATOR.deallocate_image(&interface.device, self.image);
+    }
+}
+
+/// [`egui`] [`Engine`] integration builder
 struct IntegrationBuilder<'v> {
     interface: &'v VulkanInterface,
     graphics_queue_index: u32,
@@ -644,7 +635,7 @@ struct IntegrationBuilder<'v> {
     texture_layout: vk::DescriptorSetLayout,
     sampler: vk::Sampler,
     pipeline: Pipeline,
-    descriptor_allocator: DescriptorAllocator,
+    descriptor_pool: DescriptorAllocator,
     descriptor_writer: DescriptorWriter,
     immediate_fence: vk::Fence,
     immediate_command_buffer: vk::CommandBuffer,
@@ -677,7 +668,7 @@ impl<'v> IntegrationBuilder<'v> {
             texture_layout: vk::DescriptorSetLayout::default(),
             sampler: vk::Sampler::default(),
             pipeline: Pipeline::default(),
-            descriptor_allocator: DescriptorAllocator::default(),
+            descriptor_pool: DescriptorAllocator::default(),
             descriptor_writer: DescriptorWriter::default(),
             immediate_fence: vk::Fence::default(),
             immediate_command_buffer: vk::CommandBuffer::default(),
@@ -694,7 +685,7 @@ impl<'v> IntegrationBuilder<'v> {
             scale_factor: self.scale_factor,
             pipeline: self.pipeline,
             sampler: self.sampler,
-            descriptor_allocator: self.descriptor_allocator,
+            descriptor_pool: self.descriptor_pool,
             descriptor_writer: self.descriptor_writer,
             allocations: self.allocations,
             immediate_submit: ImmediateSubmit::new(
@@ -703,11 +694,9 @@ impl<'v> IntegrationBuilder<'v> {
                 self.immediate_fence,
                 self.graphics_queue,
             ),
-            texture_descriptor_sets: HashMap::new(),
-            texture_images: HashMap::new(),
-            texture_image_infos: HashMap::new(),
+            textures: HashMap::default(),
             texture_layout: self.texture_layout,
-            user_textures: Vec::new(),
+            user_textures: Vec::default(),
         }
     }
 
@@ -756,7 +745,7 @@ impl<'v> IntegrationBuilder<'v> {
     /// Initialize resource descriptors
     fn set_descriptors(&mut self) -> Result<()> {
         let sizes = vec![PoolSizeRatio::new(vk::DescriptorType::STORAGE_IMAGE, 1.0)];
-        self.descriptor_allocator = DescriptorAllocator::new(&self.interface.device, 10, sizes)?;
+        self.descriptor_pool = DescriptorAllocator::new(&self.interface.device, 10, sizes)?;
 
         let mut layout_builder = DescriptorLayoutBuilder::default();
         layout_builder.add_binding(0, vk::DescriptorType::COMBINED_IMAGE_SAMPLER);
@@ -775,7 +764,7 @@ impl<'v> IntegrationBuilder<'v> {
         let mut builder = GraphicsPipelineBuilder::new(&self.interface.device);
         let push_constant_ranges = &[vk::PushConstantRange::builder()
             .offset(0)
-            .size(size_of::<DrawPushConstants>().try_into()?)
+            .size(size_of::<DrawPushConstants>() as u32)
             .stage_flags(vk::ShaderStageFlags::VERTEX)
             .build()];
         let layouts = &[self.texture_layout];
@@ -812,7 +801,7 @@ impl<'v> IntegrationBuilder<'v> {
     /// Create mesh allocations
     fn create_mesh_allocations(&mut self, image_count: usize) -> Result<()> {
         self.allocations = (0..image_count)
-            .map(|_| MeshAllocations::new(self.interface))
+            .map(|_| MeshAllocations::new(self.interface, VERTEX_BUFFER_SIZE, INDEX_BUFFER_SIZE))
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(())
@@ -847,18 +836,16 @@ struct Vertex {
 
 impl From<egui::epaint::Vertex> for Vertex {
     fn from(value: egui::epaint::Vertex) -> Self {
-        // TODO: Pass colors to the shader as RGBA (0-255 range) to avoid unnecessary conversions?
-        let color = value.color.to_normalized_gamma_f32();
-
         Self {
-            color: vec4(color[0], color[1], color[2], color[3]),
+            // TODO: Pass colors to the shader as RGBA (0-255 range) to avoid conversion?
+            color: value.color.to_normalized_gamma_f32().into(),
             position: vec2(value.pos.x, value.pos.y),
             uv: vec2(value.uv.x, value.uv.y),
         }
     }
 }
 
-/// Push constants for mesh object draws
+/// Push constants for GUI mesh object draws
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 struct DrawPushConstants {
@@ -875,90 +862,4 @@ impl DrawPushConstants {
             vertex_buffer,
         }
     }
-}
-
-/// Meshes are written into GPU memory through a single staging buffer
-#[derive(Copy, Clone, Debug)]
-struct MeshAllocations {
-    staging: Allocation,
-    vertices: Allocation,
-    indices: Allocation,
-}
-
-impl MeshAllocations {
-    /// Constructor
-    fn new(interface: &VulkanInterface) -> Result<Self> {
-        // Staging buffers
-        let staging_info = vk::BufferCreateInfo::builder()
-            .size(VERTEX_BUFFER_SIZE + INDEX_BUFFER_SIZE)
-            .usage(vk::BufferUsageFlags::TRANSFER_SRC)
-            .build();
-        let staging_alloc = ALLOCATOR.allocate_buffer(
-            interface,
-            staging_info,
-            vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE,
-        )?;
-        // Destination buffers
-        let vertex_info = vk::BufferCreateInfo::builder()
-            .size(VERTEX_BUFFER_SIZE)
-            .usage(
-                vk::BufferUsageFlags::VERTEX_BUFFER
-                    | vk::BufferUsageFlags::TRANSFER_DST
-                    | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
-            )
-            .build();
-        let vertex_alloc = ALLOCATOR.allocate_buffer(
-            interface,
-            vertex_info,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        )?;
-        let index_info = vk::BufferCreateInfo::builder()
-            .size(INDEX_BUFFER_SIZE)
-            .usage(vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST)
-            .build();
-        let index_alloc = ALLOCATOR.allocate_buffer(
-            interface,
-            index_info,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        )?;
-
-        Ok(Self {
-            staging: staging_alloc,
-            vertices: vertex_alloc,
-            indices: index_alloc,
-        })
-    }
-
-    /// Get mesh allocations staging memory pointers
-    fn get_staging_memory(&self, device: &Device) -> Result<MeshStagingMemory> {
-        const MESH_BUFFER_SIZE: u64 = VERTEX_BUFFER_SIZE + INDEX_BUFFER_SIZE;
-
-        let staging = self.staging.get_mapped_memory(device)?;
-        debug_assert!(
-            self.staging.size >= u64::try_from(MESH_BUFFER_SIZE)?,
-            "Staging buffer too small for mesh data: {MESH_BUFFER_SIZE} > {}",
-            self.staging.size,
-        );
-        let vertices: *mut Vertex = staging.cast();
-        let indices: *mut u32 = unsafe {
-            // Index buffer starts at VERTEX_BUFFER_SIZE offset
-            staging.add(VERTEX_BUFFER_SIZE.try_into()?).cast()
-        };
-
-        Ok(MeshStagingMemory { vertices, indices })
-    }
-
-    /// Cleanup resources
-    fn cleanup(&self, device: &Device) {
-        ALLOCATOR.deallocate(device, &self.staging);
-        ALLOCATOR.deallocate(device, &self.vertices);
-        ALLOCATOR.deallocate(device, &self.indices);
-    }
-}
-
-/// Mesh staging memory pointers
-#[derive(Copy, Clone, Debug)]
-struct MeshStagingMemory {
-    vertices: *mut Vertex,
-    indices: *mut u32,
 }

@@ -102,32 +102,29 @@ impl QueueFamilyIndices {
         let (mut graphics, mut present) = (None, None);
         for (index, properties) in properties.iter().enumerate() {
             if properties.queue_flags.contains(vk::QueueFlags::GRAPHICS) {
-                graphics = Some(u32::try_from(index)?);
+                graphics = Some(index as u32);
             }
             if unsafe {
                 instance.get_physical_device_surface_support_khr(
                     physical_device,
-                    index.try_into()?,
+                    index as u32,
                     surface,
                 )?
             } {
-                present = Some(u32::try_from(index)?);
+                present = Some(index as u32);
             }
         }
         if let (Some(graphics), Some(present)) = (graphics, present) {
             Ok(Self { graphics, present })
         } else {
-            // TODO: Better error
+            // TODO: Improve error description
             Err(anyhow!(Error::Suitability("Required queue families")))
         }
     }
 }
 
 /// Get the maximum supported MSAA sample count for a device
-pub fn get_max_msaa_samples(
-    instance: &Instance,
-    device: vk::PhysicalDevice,
-) -> vk::SampleCountFlags {
+pub fn max_msaa_samples(instance: &Instance, device: vk::PhysicalDevice) -> vk::SampleCountFlags {
     let properties = unsafe { instance.get_physical_device_properties(device) };
     let counts = properties.limits.framebuffer_color_sample_counts
         & properties.limits.framebuffer_depth_sample_counts;

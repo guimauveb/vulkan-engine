@@ -1,6 +1,5 @@
 use super::{image::create_image_view, VulkanInterface};
 use anyhow::{anyhow, Result};
-use std::ffi::c_void;
 use vulkanalia::prelude::v1_3::{vk, Device, DeviceV1_0, DeviceV1_2, HasBuilder, InstanceV1_0};
 
 /// Vulkan memory allocator
@@ -14,7 +13,42 @@ impl Allocator {
         info: vk::BufferCreateInfo,
         properties: vk::MemoryPropertyFlags,
     ) -> Result<Allocation> {
-        Allocation::allocate_buffer(interface, info, properties)
+        let buffer = unsafe { interface.device.create_buffer(&info, None)? };
+        let requirements = unsafe { interface.device.get_buffer_memory_requirements(buffer) };
+        let mut memory_info = vk::MemoryAllocateInfo::builder()
+            .allocation_size(requirements.size)
+            .memory_type_index(memory_type_index(interface, properties, requirements)?);
+
+        let shader_device_address = info.usage & vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
+            == vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS;
+        let memory = if shader_device_address {
+            let mut flags = vk::MemoryAllocateFlagsInfo::builder()
+                .flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
+            memory_info = memory_info.push_next(&mut flags);
+            unsafe { interface.device.allocate_memory(&memory_info, None)? }
+        } else {
+            unsafe { interface.device.allocate_memory(&memory_info, None)? }
+        };
+
+        unsafe {
+            interface.device.bind_buffer_memory(buffer, memory, 0)?;
+        }
+
+        let device_address = if shader_device_address {
+            let info = vk::BufferDeviceAddressInfo::builder()
+                .buffer(buffer)
+                .build();
+            Some(unsafe { interface.device.get_buffer_device_address(&info) })
+        } else {
+            None
+        };
+
+        Ok(Allocation {
+            buffer,
+            memory,
+            size: requirements.size,
+            device_address,
+        })
     }
 
     /// Destroy the buffer and allocated resources.
@@ -48,12 +82,25 @@ impl Allocator {
             .usage(info.usage)
             .build();
         let image = unsafe { interface.device.create_image(&img_info, None)? };
-        let allocation = Allocation::allocate_image(
-            interface,
-            image,
-            // Always allocate images on dedicated GPU memory
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        )?;
+
+        let requirements = unsafe { interface.device.get_image_memory_requirements(image) };
+        let memory_info = vk::MemoryAllocateInfo::builder()
+            .allocation_size(requirements.size)
+            .memory_type_index(memory_type_index(
+                interface,
+                // Always allocate images on dedicated GPU memory
+                vk::MemoryPropertyFlags::DEVICE_LOCAL,
+                requirements,
+            )?)
+            .build();
+        let memory = unsafe { interface.device.allocate_memory(&memory_info, None)? };
+        unsafe { interface.device.bind_image_memory(image, memory, 0)? };
+        let allocation = Allocation {
+            buffer: vk::Buffer::default(),
+            memory,
+            size: requirements.size,
+            device_address: None,
+        };
 
         let aspect_flags = if info.format == vk::Format::D32_SFLOAT {
             vk::ImageAspectFlags::DEPTH
@@ -68,13 +115,13 @@ impl Allocator {
             mip_levels,
         )?;
 
-        Ok(AllocatedImage::new(
+        Ok(AllocatedImage {
             image,
             image_view,
             allocation,
-            info.extent,
-            info.format,
-        ))
+            image_extent: info.extent,
+            image_format: info.format,
+        })
     }
 
     /// Destroy the image and allocated resources.
@@ -98,8 +145,12 @@ pub struct Allocation {
 
 impl Allocation {
     /// Map allocated memory
-    pub fn get_mapped_memory(&self, device: &Device) -> Result<*mut c_void> {
-        unsafe { Ok(device.map_memory(self.memory, 0, self.size, vk::MemoryMapFlags::empty())?) }
+    pub fn mapped_memory<T>(&self, device: &Device) -> Result<*mut T> {
+        unsafe {
+            Ok(device
+                .map_memory(self.memory, 0, self.size, vk::MemoryMapFlags::empty())?
+                .cast())
+        }
     }
 
     /// Unmap the memory
@@ -107,72 +158,6 @@ impl Allocation {
         unsafe {
             device.unmap_memory(self.memory);
         }
-    }
-
-    /// Allocate a new buffer
-    fn allocate_buffer(
-        interface: &VulkanInterface,
-        info: vk::BufferCreateInfo,
-        properties: vk::MemoryPropertyFlags,
-    ) -> Result<Self> {
-        let buffer = unsafe { interface.device.create_buffer(&info, None)? };
-        let requirements = unsafe { interface.device.get_buffer_memory_requirements(buffer) };
-        let mut memory_info = vk::MemoryAllocateInfo::builder()
-            .allocation_size(requirements.size)
-            .memory_type_index(get_memory_type_index(interface, properties, requirements)?);
-
-        let shader_device_address = info.usage & vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS
-            == vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS;
-        let memory = if shader_device_address {
-            let mut flags = vk::MemoryAllocateFlagsInfo::builder()
-                .flags(vk::MemoryAllocateFlags::DEVICE_ADDRESS);
-            memory_info = memory_info.push_next(&mut flags);
-            unsafe { interface.device.allocate_memory(&memory_info, None)? }
-        } else {
-            unsafe { interface.device.allocate_memory(&memory_info, None)? }
-        };
-
-        unsafe {
-            interface.device.bind_buffer_memory(buffer, memory, 0)?;
-        }
-
-        let device_address = if shader_device_address {
-            let info = vk::BufferDeviceAddressInfo::builder()
-                .buffer(buffer)
-                .build();
-            Some(unsafe { interface.device.get_buffer_device_address(&info) })
-        } else {
-            None
-        };
-
-        Ok(Self {
-            buffer,
-            memory,
-            size: requirements.size,
-            device_address,
-        })
-    }
-
-    /// Allocate a new image
-    fn allocate_image(
-        interface: &VulkanInterface,
-        image: vk::Image,
-        properties: vk::MemoryPropertyFlags,
-    ) -> Result<Self> {
-        let requirements = unsafe { interface.device.get_image_memory_requirements(image) };
-        let info = vk::MemoryAllocateInfo::builder()
-            .allocation_size(requirements.size)
-            .memory_type_index(get_memory_type_index(interface, properties, requirements)?)
-            .build();
-        let memory = unsafe { interface.device.allocate_memory(&info, None)? };
-        unsafe { interface.device.bind_image_memory(image, memory, 0)? };
-
-        Ok(Self {
-            buffer: vk::Buffer::default(),
-            memory,
-            size: requirements.size,
-            device_address: None,
-        })
     }
 
     /// Return the buffer device address
@@ -203,30 +188,10 @@ pub struct AllocatedImage {
 }
 
 impl AllocatedImage {
-    /// Constructor
-    #[inline]
-    pub fn new(
-        image: vk::Image,
-        image_view: vk::ImageView,
-        allocation: Allocation,
-        image_extent: vk::Extent3D,
-        image_format: vk::Format,
-    ) -> Self {
-        Self {
-            image,
-            image_view,
-            allocation,
-            image_extent,
-            image_format,
-        }
-    }
-
-    /// Cleanup the resources
+    /// Destroy the resources
     pub fn destroy(&mut self, device: &Device) {
         unsafe {
             device.destroy_image_view(self.image_view, None);
-        }
-        unsafe {
             device.destroy_image(self.image, None);
         }
         self.allocation.destroy(device);
@@ -263,7 +228,7 @@ impl AllocatedImageInfo {
     }
 }
 
-fn get_memory_type_index(
+fn memory_type_index(
     interface: &VulkanInterface,
     properties: vk::MemoryPropertyFlags,
     requirements: vk::MemoryRequirements,

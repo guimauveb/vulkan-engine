@@ -1,110 +1,63 @@
-pub mod gltf;
 pub mod obj;
 
 use super::{
-    material::GLTFMaterial,
+    material::{Material, MaterialInstance},
     memory::Allocation,
-    scene::{DrawContext, Node, RenderObject, Renderable},
-    Engine, Mat4, Vec2, Vec3, Vec4, ALLOCATOR,
+    Engine, Mat4, Vec2, Vec3, Vec4, VulkanInterface, ALLOCATOR,
 };
 use anyhow::Result;
-use log::debug;
+use cgmath::{vec4, SquareMatrix};
 use std::{
+    ffi::c_void,
     hash::{Hash, Hasher},
-    path::Path,
     ptr::copy_nonoverlapping as memcpy,
     rc::Rc,
 };
 use vulkanalia::prelude::v1_3::{vk, Device, DeviceV1_0, HasBuilder};
 
 impl Engine {
-    /// Load default meshes
-    pub fn load_default_meshes(&mut self) -> Result<()> {
-        debug!("Loading default meshes");
-        self.load_gltf(Path::new("./assets/basicmesh.glb"))?;
-
-        Ok(())
-    }
-
     /// Upload a mesh to the engine
-    pub fn upload_mesh(&mut self, mesh: RawMesh) -> Result<()> {
-        let (index_buffer_size, vertex_buffer_size) = (
+    pub(crate) fn upload_mesh(&mut self, mesh: RawMesh) -> Result<MeshAsset> {
+        let (index_size, vertex_size) = (
             size_of_val(&mesh.indices[..]) as vk::DeviceSize,
             size_of_val(&mesh.vertices[..]) as vk::DeviceSize,
         );
-        let mesh_data_size = vertex_buffer_size + index_buffer_size;
-
-        let vertex_info = vk::BufferCreateInfo::builder()
-            .size(vertex_buffer_size)
-            .usage(
-                vk::BufferUsageFlags::VERTEX_BUFFER
-                    | vk::BufferUsageFlags::TRANSFER_DST
-                    | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
-            )
-            .build();
-        let vertex_alloc = ALLOCATOR.allocate_buffer(
-            &self.interface,
-            vertex_info,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        )?;
-        let index_info = vk::BufferCreateInfo::builder()
-            .size(index_buffer_size)
-            .usage(vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST)
-            .build();
-        let index_alloc = ALLOCATOR.allocate_buffer(
-            &self.interface,
-            index_info,
-            vk::MemoryPropertyFlags::DEVICE_LOCAL,
-        )?;
-
-        // Use a staging buffer to copy the data into GPU only accessible memory for better
-        // performance
-        let staging_info = vk::BufferCreateInfo::builder()
-            .size(mesh_data_size)
-            .usage(vk::BufferUsageFlags::TRANSFER_SRC)
-            .build();
-        let staging_alloc = ALLOCATOR.allocate_buffer(
-            &self.interface,
-            staging_info,
-            vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE,
-        )?;
-
-        debug_assert!(
-            staging_alloc.size >= mesh_data_size,
-            "Staging buffer too small for mesh data: {mesh_data_size} > {}",
-            staging_alloc.size
-        );
-        let mut memory: *mut Vertex = staging_alloc
-            .get_mapped_memory(&self.interface.device)?
-            .cast();
+        let allocations = MeshAllocations::new(&self.interface, vertex_size, index_size)?;
+        let mut staging_memory: MeshStagingMemory<Vertex, u32> =
+            allocations.staging_memory(&self.interface.device)?;
         unsafe {
-            // Copy vertex buffer
-            memcpy(mesh.vertices.as_ptr(), memory, mesh.vertices.len());
-            memory = memory.add(mesh.vertices.len());
-            // Copy index buffer
-            memcpy(mesh.indices.as_ptr(), memory.cast(), mesh.indices.len());
+            memcpy(
+                mesh.vertices.as_ptr(),
+                staging_memory.vertices,
+                mesh.vertices.len(),
+            );
+            staging_memory.vertices = staging_memory.vertices.add(mesh.vertices.len());
+            memcpy(
+                mesh.indices.as_ptr(),
+                staging_memory.indices,
+                mesh.indices.len(),
+            );
         }
-        staging_alloc.unmap_memory(&self.interface.device);
 
         let copy = |cmd_buffer: vk::CommandBuffer| {
-            let vertex_copy = vk::BufferCopy::builder().size(vertex_buffer_size).build();
+            let vertex_copy = vk::BufferCopy::builder().size(vertex_size).build();
             unsafe {
                 self.interface.device.cmd_copy_buffer(
                     cmd_buffer,
-                    staging_alloc.buffer,
-                    vertex_alloc.buffer,
+                    allocations.staging.buffer,
+                    allocations.vertices.buffer,
                     &[vertex_copy],
                 );
             }
             let index_copy = vk::BufferCopy::builder()
-                .src_offset(vertex_buffer_size)
-                .size(index_buffer_size)
+                .src_offset(vertex_size)
+                .size(index_size)
                 .build();
             unsafe {
                 self.interface.device.cmd_copy_buffer(
                     cmd_buffer,
-                    staging_alloc.buffer,
-                    index_alloc.buffer,
+                    allocations.staging.buffer,
+                    allocations.indices.buffer,
                     &[index_copy],
                 );
             }
@@ -113,18 +66,83 @@ impl Engine {
         };
         self.immediate_submit
             .execute(&self.interface.device, copy)?;
-        ALLOCATOR.deallocate(&self.interface.device, &staging_alloc);
 
-        let mut mesh = MeshAsset::new(mesh.name, mesh.surfaces, index_alloc, vertex_alloc);
-        for surface in &mut mesh.surfaces {
-            surface.material = self.default_material.into();
-        }
-        let mesh_node = MeshNode::new(Node::default(), mesh.into());
-        self.loaded_nodes
-            .insert(mesh_node.mesh.name.clone(), mesh_node.into());
+        allocations.staging.unmap_memory(&self.interface.device);
+        ALLOCATOR.deallocate(&self.interface.device, &allocations.staging);
 
-        Ok(())
+        Ok(MeshAsset::new(
+            mesh.name,
+            mesh.surfaces,
+            allocations.vertices,
+            allocations.indices,
+        ))
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Scene {
+    pub view: Mat4,
+    pub projection: Mat4,
+    pub view_proj: Mat4,
+    pub ambient_color: Vec4,
+    pub sunlight_direction: Vec4,
+    pub sunlight_color: Vec4,
+}
+
+impl Default for Scene {
+    fn default() -> Self {
+        Self {
+            view: Mat4::identity(),
+            projection: Mat4::identity(),
+            view_proj: Mat4::identity(),
+            ambient_color: vec4(0.0, 0.0, 0.0, 1.0),
+            sunlight_direction: vec4(0.0, 0.0, 0.0, 1.0),
+            sunlight_color: vec4(0.0, 0.0, 0.0, 1.0),
+        }
+    }
+}
+
+/// Dynamically renderable object
+pub trait Renderable {
+    fn draw(&self, top_matrix: Mat4, context: &mut DrawContext) -> Result<()>;
+}
+
+/// Object to render
+#[derive(Debug, Clone)]
+pub struct RenderObject {
+    pub index_count: u32,
+    pub first_index: u32,
+    pub index_buffer: vk::Buffer,
+    pub material: MaterialInstance,
+    pub transform: Mat4,
+    pub vertex_buffer_address: vk::DeviceAddress,
+}
+
+impl RenderObject {
+    /// Constructor
+    #[inline]
+    pub fn new(
+        index_count: u32,
+        first_index: u32,
+        index_buffer: vk::Buffer,
+        material: MaterialInstance,
+        transform: Mat4,
+        vertex_buffer_address: vk::DeviceAddress,
+    ) -> Self {
+        Self {
+            index_count,
+            first_index,
+            index_buffer,
+            material,
+            transform,
+            vertex_buffer_address,
+        }
+    }
+}
+
+#[derive(Default, Debug, Clone)]
+pub struct DrawContext {
+    pub opaque_surfaces: Vec<RenderObject>,
 }
 
 /// Push constants for mesh object draws
@@ -145,47 +163,13 @@ impl DrawPushConstants {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct MeshNode {
-    pub node: Node,
-    /// Using an [`Rc`] as we can have multiple nodes refering to the same mesh
-    pub mesh: Rc<MeshAsset>,
-}
-
-impl MeshNode {
-    /// Constructor
-    #[inline]
-    pub fn new(node: Node, mesh: Rc<MeshAsset>) -> Self {
-        Self { node, mesh }
-    }
-}
-
-impl Renderable for MeshNode {
-    fn draw(&self, top_matrix: Mat4, context: &mut DrawContext) -> Result<()> {
-        let node_matrix = top_matrix * self.node.world_transform;
-        for surface in &self.mesh.surfaces {
-            let render_object = RenderObject::new(
-                surface.count,
-                surface.start_index,
-                self.mesh.index_alloc.buffer,
-                surface.material.data,
-                node_matrix,
-                self.mesh.vertex_alloc.device_address()?,
-            );
-            context.opaque_surfaces.push(render_object);
-        }
-        self.node.draw(top_matrix, context)?;
-
-        Ok(())
-    }
-}
-
 /// Mesh data to upload to the engine
+#[derive(Debug, Clone)]
 pub struct RawMesh {
     pub name: String,
     pub surfaces: Vec<GeoSurface>,
-    pub indices: Vec<u32>,
     pub vertices: Vec<Vertex>,
+    pub indices: Vec<u32>,
 }
 
 impl RawMesh {
@@ -193,25 +177,26 @@ impl RawMesh {
     pub fn new(
         name: String,
         surfaces: Vec<GeoSurface>,
-        indices: Vec<u32>,
         vertices: Vec<Vertex>,
+        indices: Vec<u32>,
     ) -> Self {
         Self {
             name,
             surfaces,
-            indices,
             vertices,
+            indices,
         }
     }
 }
 
 /// Mesh asset to render
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct MeshAsset {
     pub name: String,
     pub surfaces: Vec<GeoSurface>,
-    pub index_alloc: Allocation,
     pub vertex_alloc: Allocation,
+    pub index_alloc: Allocation,
+    destroyed: bool,
 }
 
 impl MeshAsset {
@@ -220,37 +205,131 @@ impl MeshAsset {
     pub fn new(
         name: String,
         surfaces: Vec<GeoSurface>,
-        index_alloc: Allocation,
         vertex_alloc: Allocation,
+        index_alloc: Allocation,
     ) -> Self {
         Self {
             name,
             surfaces,
-            index_alloc,
             vertex_alloc,
+            index_alloc,
+            destroyed: false,
         }
     }
 
-    /// Cleanup resources
-    pub fn cleanup(&self, device: &Device) {
-        ALLOCATOR.deallocate(device, &self.index_alloc);
-        ALLOCATOR.deallocate(device, &self.vertex_alloc);
+    /// Destroy resources
+    pub fn destroy(&mut self, device: &Device) {
+        if !self.destroyed {
+            ALLOCATOR.deallocate(device, &self.vertex_alloc);
+            ALLOCATOR.deallocate(device, &self.index_alloc);
+        }
+        self.destroyed = true;
     }
 }
 
+/// Meshes are written into GPU memory through a single staging buffer
+#[derive(Copy, Clone, Debug)]
+pub struct MeshAllocations {
+    pub staging: Allocation,
+    pub vertices: Allocation,
+    pub indices: Allocation,
+}
+
+impl MeshAllocations {
+    /// Constructor
+    pub fn new(interface: &VulkanInterface, vertex_size: u64, index_size: u64) -> Result<Self> {
+        // Staging buffers
+        let staging_info = vk::BufferCreateInfo::builder()
+            .size(vertex_size + index_size)
+            .usage(vk::BufferUsageFlags::TRANSFER_SRC)
+            .build();
+        let staging_alloc = ALLOCATOR.allocate_buffer(
+            interface,
+            staging_info,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        )?;
+        // Destination buffers
+        let vertex_info = vk::BufferCreateInfo::builder()
+            .size(vertex_size)
+            .usage(
+                vk::BufferUsageFlags::VERTEX_BUFFER
+                    | vk::BufferUsageFlags::TRANSFER_DST
+                    | vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+            )
+            .build();
+        let vertex_alloc = ALLOCATOR.allocate_buffer(
+            interface,
+            vertex_info,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        )?;
+        let index_info = vk::BufferCreateInfo::builder()
+            .size(index_size)
+            .usage(vk::BufferUsageFlags::INDEX_BUFFER | vk::BufferUsageFlags::TRANSFER_DST)
+            .build();
+        let index_alloc = ALLOCATOR.allocate_buffer(
+            interface,
+            index_info,
+            vk::MemoryPropertyFlags::DEVICE_LOCAL,
+        )?;
+
+        Ok(Self {
+            staging: staging_alloc,
+            vertices: vertex_alloc,
+            indices: index_alloc,
+        })
+    }
+
+    /// Get mesh allocations staging memory pointers.
+    ///
+    /// Pointers are cast to the desired `Vertex` and `Index` types.
+    pub fn staging_memory<Vertex, Index>(
+        &self,
+        device: &Device,
+    ) -> Result<MeshStagingMemory<Vertex, Index>> {
+        let staging = self.staging.mapped_memory::<c_void>(device)?;
+        #[cfg(debug_assertions)]
+        {
+            let total_size = self.vertices.size + self.indices.size;
+            assert!(
+                self.staging.size >= total_size,
+                "Staging buffer too small for mesh data: {total_size} > {}",
+                self.staging.size,
+            );
+        }
+        let vertices: *mut Vertex = staging.cast();
+        let indices: *mut Index = unsafe { staging.add(self.vertices.size as usize).cast() };
+
+        Ok(MeshStagingMemory { vertices, indices })
+    }
+
+    /// Destroy resources
+    pub fn destroy(&self, device: &Device) {
+        ALLOCATOR.deallocate(device, &self.staging);
+        ALLOCATOR.deallocate(device, &self.vertices);
+        ALLOCATOR.deallocate(device, &self.indices);
+    }
+}
+
+/// Mesh staging memory pointers
+#[derive(Copy, Clone, Debug)]
+pub struct MeshStagingMemory<Vertex, Index> {
+    pub vertices: *mut Vertex,
+    pub indices: *mut Index,
+}
+
 /// Wehre a mesh starts and ends in a buffer
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct GeoSurface {
     pub start_index: u32,
     pub count: u32,
     /// Using an [`Rc`] as we can have multiple meshes refering to the same material
-    pub material: Rc<GLTFMaterial>,
+    pub material: Rc<Material>,
 }
 
 impl GeoSurface {
     /// Constructor
     #[inline]
-    pub fn new(start_index: u32, count: u32, material: Rc<GLTFMaterial>) -> Self {
+    pub fn new(start_index: u32, count: u32, material: Rc<Material>) -> Self {
         Self {
             start_index,
             count,

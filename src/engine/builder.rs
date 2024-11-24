@@ -4,11 +4,11 @@ use super::{
     device::{create_logical_device, pick_physical_device, QueueFamilyIndices},
     frame::Frame,
     gui::{EguiTheme, Integration as EguiIntegration},
-    material::{GLTFMaterial, GLTFMetallicRoughness, GLTFMetallicRoughnessBuilder},
+    image::RgbToRgbaPushConstants,
+    material::{Material, MetallicRoughness, MetallicRoughnessBuilder},
     memory::{AllocatedImage, AllocatedImageInfo},
-    meshes::DrawPushConstants,
+    meshes::{DrawContext, DrawPushConstants, Scene},
     pipelines::{ComputePipelineBuilder, GraphicsPipelineBuilder, Pipeline},
-    scene::{DrawContext, Scene},
     swapchain::Swapchain,
     Engine, ImmediateSubmit, VulkanInterface, ALLOCATOR, ENABLE_VALIDATION_LAYER,
     MAX_FRAMES_IN_FLIGHT, PORTABILITY_MACOS_VERSION, VALIDATION_LAYER,
@@ -72,17 +72,20 @@ pub struct EngineBuilder {
     default_sampler_linear: vk::Sampler,
     single_image_descriptor_layout: vk::DescriptorSetLayout,
     draw_extent: vk::Extent2D,
-    descriptor_allocator: DescriptorAllocator,
+    descriptor_pool: DescriptorAllocator,
     descriptor_writer: DescriptorWriter,
     draw_image_descriptors: vk::DescriptorSet,
     draw_image_descriptor_layout: vk::DescriptorSetLayout,
+    rgb_to_rgba_descriptors: vk::DescriptorSet,
+    rgb_to_rgba_descriptor_layout: vk::DescriptorSetLayout,
     gradient_pipeline: Pipeline,
+    rgb_to_rgba_pipeline: Pipeline,
     mesh_pipeline: Pipeline,
     immediate_fence: vk::Fence,
     immediate_command_buffer: vk::CommandBuffer,
     immediate_command_pool: vk::CommandPool,
     scene_descriptor_layout: vk::DescriptorSetLayout,
-    metal_rough_material: GLTFMetallicRoughness,
+    metal_rough_material: MetallicRoughness,
     gui: Option<EguiIntegration>,
     camera: Option<Camera>,
 }
@@ -133,17 +136,20 @@ impl EngineBuilder {
             default_sampler_linear: vk::Sampler::default(),
             single_image_descriptor_layout: vk::DescriptorSetLayout::default(),
             draw_extent: vk::Extent2D::default(),
-            descriptor_allocator: DescriptorAllocator::default(),
+            descriptor_pool: DescriptorAllocator::default(),
             descriptor_writer: DescriptorWriter::default(),
             draw_image_descriptors: vk::DescriptorSet::default(),
             draw_image_descriptor_layout: vk::DescriptorSetLayout::default(),
+            rgb_to_rgba_descriptors: vk::DescriptorSet::default(),
+            rgb_to_rgba_descriptor_layout: vk::DescriptorSetLayout::default(),
             gradient_pipeline: Pipeline::default(),
+            rgb_to_rgba_pipeline: Pipeline::default(),
             mesh_pipeline: Pipeline::default(),
             immediate_fence: vk::Fence::default(),
             immediate_command_buffer: vk::CommandBuffer::default(),
             immediate_command_pool: vk::CommandPool::default(),
             scene_descriptor_layout: vk::DescriptorSetLayout::default(),
-            metal_rough_material: GLTFMetallicRoughness::default(),
+            metal_rough_material: MetallicRoughness::default(),
             gui: None,
             camera: None,
         })
@@ -158,7 +164,7 @@ impl EngineBuilder {
             surface: self.surface,
             indices: self.indices,
             graphics_queue: self.graphics_queue,
-            present_queue: self.present_queue,
+            _present_queue: self.present_queue,
             swapchain: self.swapchain,
             draw_image: self.draw_image,
             depth_image: self.depth_image,
@@ -169,11 +175,14 @@ impl EngineBuilder {
             draw_extent: self.draw_extent,
             frames: self.frames,
             current_frame: 0,
-            descriptor_allocator: self.descriptor_allocator,
+            descriptor_pool: self.descriptor_pool,
             descriptor_writer: self.descriptor_writer,
             draw_image_descriptors: self.draw_image_descriptors,
             draw_image_descriptor_layout: self.draw_image_descriptor_layout,
+            rgb_to_rgba_descriptors: self.rgb_to_rgba_descriptors,
+            rgb_to_rgba_descriptor_layout: self.rgb_to_rgba_descriptor_layout,
             gradient_pipeline: self.gradient_pipeline,
+            rgb_to_rgba_pipeline: self.rgb_to_rgba_pipeline,
             mesh_pipeline: self.mesh_pipeline,
             immediate_submit: ImmediateSubmit::new(
                 self.immediate_command_pool,
@@ -181,12 +190,12 @@ impl EngineBuilder {
                 self.immediate_fence,
                 self.graphics_queue,
             ),
+            default_material: Material::default(),
+            metal_rough_material: self.metal_rough_material,
+            main_draw_context: DrawContext::default(),
             scene: Scene::default(),
             scene_descriptor_layout: self.scene_descriptor_layout,
-            metal_rough_material: self.metal_rough_material,
-            default_material: GLTFMaterial::default(),
-            main_draw_context: DrawContext::default(),
-            loaded_nodes: HashMap::default(),
+            scenes: HashMap::default(),
             gui: self.gui,
             gui_theme: Some(EguiTheme::Dark),
             camera: self.camera,
@@ -323,9 +332,9 @@ impl EngineBuilder {
     pub fn set_descriptors(&mut self) -> Result<()> {
         // Create a descriptor pool that will hold 10 sets with 1 image each
         let sizes = vec![PoolSizeRatio::new(vk::DescriptorType::STORAGE_IMAGE, 1.0)];
-        self.descriptor_allocator = DescriptorAllocator::new(&self.interface.device, 10, sizes)?;
+        self.descriptor_pool = DescriptorAllocator::new(&self.interface.device, 10, sizes)?;
 
-        // Make the descriptor set layout for our compute draw
+        // Descriptor set layout for the gradient compute draw
         let mut layout_builder = DescriptorLayoutBuilder::default();
         layout_builder.add_binding(0, vk::DescriptorType::STORAGE_IMAGE);
         self.draw_image_descriptor_layout = layout_builder.build(
@@ -337,7 +346,7 @@ impl EngineBuilder {
 
         // Allocate a descriptor set for the draw image
         self.draw_image_descriptors = self
-            .descriptor_allocator
+            .descriptor_pool
             .allocate(&self.interface.device, self.draw_image_descriptor_layout)?;
 
         self.descriptor_writer.write_image(
@@ -350,6 +359,22 @@ impl EngineBuilder {
         self.descriptor_writer
             .update_set(&self.interface.device, self.draw_image_descriptors);
         self.descriptor_writer.clear();
+
+        // Descriptor set layout for the rgb->rgba compute shader
+        let mut layout_builder = DescriptorLayoutBuilder::default();
+        // Output rgba image
+        layout_builder.add_binding(0, vk::DescriptorType::STORAGE_IMAGE);
+        self.rgb_to_rgba_descriptor_layout = layout_builder.build(
+            &self.interface.device,
+            vk::ShaderStageFlags::COMPUTE,
+            Option::<vk::DescriptorSetLayoutBindingFlagsCreateInfo>::None,
+            vk::DescriptorSetLayoutCreateFlags::empty(),
+        )?;
+
+        // Allocate a descriptor set for the rgb->rgba buffer
+        self.rgb_to_rgba_descriptors = self
+            .descriptor_pool
+            .allocate(&self.interface.device, self.rgb_to_rgba_descriptor_layout)?;
 
         // Frame descriptors
         for frame in &mut self.frames {
@@ -386,15 +411,36 @@ impl EngineBuilder {
         Ok(())
     }
 
-    /// Create the compute pipeline
-    pub fn set_compute_pipeline(&mut self) -> Result<()> {
+    /// Create the compute pipelines
+    pub fn set_compute_pipelines(&mut self) -> Result<()> {
         let mut builder = ComputePipelineBuilder::new(&self.interface.device);
-        let layouts = &[self.draw_image_descriptor_layout];
-        builder.set_descriptor_layouts(layouts)?;
-        builder.set_shader(include_bytes!("../../shaders/spv/compute.spv"))?;
+        let set_layouts = &[self.draw_image_descriptor_layout];
+        let layout = vk::PipelineLayoutCreateInfo::builder()
+            .set_layouts(set_layouts)
+            .build();
+        builder.set_layout(&layout)?;
+        builder.set_shader(include_bytes!("../../shaders/spv/gradient.spv"))?;
         builder.set_shader_stage(vk::ShaderStageFlags::COMPUTE);
 
         self.gradient_pipeline = builder.build()?;
+
+        // rgb to rgba conversion shader
+        let mut builder = ComputePipelineBuilder::new(&self.interface.device);
+        let push_constant_ranges = &[vk::PushConstantRange::builder()
+            .offset(0)
+            .size(size_of::<RgbToRgbaPushConstants>() as u32)
+            .stage_flags(vk::ShaderStageFlags::COMPUTE)
+            .build()];
+        let set_layouts = &[self.rgb_to_rgba_descriptor_layout];
+        let layout = vk::PipelineLayoutCreateInfo::builder()
+            .push_constant_ranges(push_constant_ranges)
+            .set_layouts(set_layouts)
+            .build();
+        builder.set_layout(&layout)?;
+        builder.set_shader(include_bytes!("../../shaders/spv/rgb_to_rgba.spv"))?;
+        builder.set_shader_stage(vk::ShaderStageFlags::COMPUTE);
+
+        self.rgb_to_rgba_pipeline = builder.build()?;
 
         Ok(())
     }
@@ -404,7 +450,7 @@ impl EngineBuilder {
         let mut builder = GraphicsPipelineBuilder::new(&self.interface.device);
         let push_constant_ranges = &[vk::PushConstantRange::builder()
             .offset(0)
-            .size(size_of::<DrawPushConstants>().try_into()?)
+            .size(size_of::<DrawPushConstants>() as u32)
             .stage_flags(vk::ShaderStageFlags::VERTEX)
             .build()];
         let set_layouts = &[self.single_image_descriptor_layout];
@@ -414,6 +460,7 @@ impl EngineBuilder {
             .build();
         builder.set_layout(&layout)?;
         builder.set_shaders(
+            // TODO: Check if these are the correct shaders (or rename)
             include_bytes!("../../shaders/spv/colored_triangle_mesh_vert.spv"),
             include_bytes!("../../shaders/spv/tex_image_frag.spv"),
         )?;
@@ -446,8 +493,8 @@ impl EngineBuilder {
     }
 
     /// Initialize material pipeline
-    pub fn set_metal_rough_material_pipeline(&mut self) -> Result<()> {
-        let mut builder = GLTFMetallicRoughnessBuilder::new(&self.interface.device);
+    pub fn set_metal_roughness_material_pipeline(&mut self) -> Result<()> {
+        let mut builder = MetallicRoughnessBuilder::new(&self.interface.device);
         builder.set_pipelines(
             self.scene_descriptor_layout,
             self.draw_image.image_format,

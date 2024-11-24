@@ -3,7 +3,7 @@ use super::{
     memory::{AllocatedImage, Allocation},
     meshes::DrawPushConstants,
     pipelines::{GraphicsPipelineBuilder, Pipeline},
-    Vec4, ALLOCATOR,
+    Vec4,
 };
 use anyhow::Result;
 use cgmath::vec4;
@@ -12,14 +12,14 @@ use vulkanalia::{
     vk::DeviceV1_0,
 };
 
-pub struct GLTFMetallicRoughnessBuilder<'d> {
+pub struct MetallicRoughnessBuilder<'d> {
     device: &'d Device,
     opaque_pipeline: Pipeline,
     transparent_pipeline: Pipeline,
     material_layout: vk::DescriptorSetLayout,
 }
 
-impl<'d> GLTFMetallicRoughnessBuilder<'d> {
+impl<'d> MetallicRoughnessBuilder<'d> {
     /// Initialize the builder
     #[inline]
     pub fn new(device: &'d Device) -> Self {
@@ -31,10 +31,10 @@ impl<'d> GLTFMetallicRoughnessBuilder<'d> {
         }
     }
 
-    /// Build a [`GLTFMetallicRoughness`]
+    /// Build a [`MetallicRoughness`]
     #[inline]
-    pub fn build(self) -> GLTFMetallicRoughness {
-        GLTFMetallicRoughness {
+    pub fn build(self) -> MetallicRoughness {
+        MetallicRoughness {
             opaque_pipeline: self.opaque_pipeline,
             transparent_pipeline: self.transparent_pipeline,
             material_layout: self.material_layout,
@@ -66,7 +66,7 @@ impl<'d> GLTFMetallicRoughnessBuilder<'d> {
         let mut pipeline_builder = GraphicsPipelineBuilder::new(self.device);
         let mattrix_range = &[vk::PushConstantRange::builder()
             .offset(0)
-            .size(size_of::<DrawPushConstants>().try_into()?)
+            .size(size_of::<DrawPushConstants>() as u32)
             .stage_flags(vk::ShaderStageFlags::VERTEX)
             .build()];
         let layouts = &[scene_descriptor_layout, self.material_layout];
@@ -81,7 +81,7 @@ impl<'d> GLTFMetallicRoughnessBuilder<'d> {
         )?;
         pipeline_builder.set_input_topology(vk::PrimitiveTopology::TRIANGLE_LIST);
         pipeline_builder.set_polygon_mode(vk::PolygonMode::FILL);
-        pipeline_builder.set_cull_mode(vk::CullModeFlags::FRONT, vk::FrontFace::CLOCKWISE);
+        pipeline_builder.set_cull_mode(vk::CullModeFlags::NONE, vk::FrontFace::CLOCKWISE);
         pipeline_builder.disable_multisampling();
         pipeline_builder.disable_blending();
         pipeline_builder.enable_depthtest(vk::TRUE, vk::CompareOp::GREATER_OR_EQUAL);
@@ -110,7 +110,7 @@ impl<'d> GLTFMetallicRoughnessBuilder<'d> {
 }
 
 #[derive(Default, Debug, Clone)]
-pub struct GLTFMetallicRoughness {
+pub struct MetallicRoughness {
     pub opaque_pipeline: Pipeline,
     pub transparent_pipeline: Pipeline,
     pub material_layout: vk::DescriptorSetLayout,
@@ -119,28 +119,28 @@ pub struct GLTFMetallicRoughness {
     pub writer: DescriptorWriter,
 }
 
-impl GLTFMetallicRoughness {
+impl MetallicRoughness {
     pub fn write_material(
         &mut self,
         device: &Device,
         pass: MaterialPass,
         resources: MaterialResources,
-        descriptor_allocator: &mut DescriptorAllocator,
-    ) -> Result<GLTFMaterial> {
+        descriptor_pool: &mut DescriptorAllocator,
+    ) -> Result<Material> {
         self.material_resources = resources;
         let pipeline = if pass == MaterialPass::Transparent {
             self.transparent_pipeline
         } else {
             self.opaque_pipeline
         };
-        let material_set = descriptor_allocator.allocate(device, self.material_layout)?;
+        let material_set = descriptor_pool.allocate(device, self.material_layout)?;
 
         self.writer.clear();
         self.writer.write_buffer(
             0,
-            self.material_resources.data_alloc.buffer,
-            size_of::<MaterialConstants>().try_into()?,
-            self.material_resources.data_buffer_offset,
+            self.material_resources.alloc.buffer,
+            size_of::<MaterialConstants>() as vk::DeviceSize,
+            self.material_resources.buffer_offset,
             vk::DescriptorType::UNIFORM_BUFFER,
         );
         self.writer.write_image(
@@ -161,15 +161,15 @@ impl GLTFMetallicRoughness {
         // );
         self.writer.update_set(device, material_set);
 
-        Ok(GLTFMaterial::new(MaterialInstance::new(
+        Ok(Material::new(MaterialInstance::new(
             pipeline,
             material_set,
             pass,
         )))
     }
 
-    /// Cleanup the resources
-    pub fn cleanup(&mut self, device: &Device) {
+    /// Destroy the resources
+    pub fn destroy(&mut self, device: &Device) {
         unsafe {
             device.destroy_descriptor_set_layout(self.material_layout, None);
             // Both pipelines share the same layout so we only destroy it once
@@ -177,16 +177,15 @@ impl GLTFMetallicRoughness {
             device.destroy_pipeline(self.opaque_pipeline.pipeline, None);
             device.destroy_pipeline(self.transparent_pipeline.pipeline, None);
         }
-        self.material_resources.cleanup(device);
     }
 }
 
 #[derive(Default, Debug, Clone, Copy)]
-pub struct GLTFMaterial {
+pub struct Material {
     pub data: MaterialInstance,
 }
 
-impl GLTFMaterial {
+impl Material {
     /// Constructor
     #[inline]
     pub fn new(data: MaterialInstance) -> Self {
@@ -216,31 +215,60 @@ impl MaterialInstance {
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct MaterialConstants {
-    pub color_factors: Vec4,
-    pub metal_rough_factors: Vec4,
+    pub color_factor: Vec4,
+    pub roughness_factor: Vec4,
     // Padding, needed for uniform buffers
     pub extra: [Vec4; 14],
+}
+
+impl MaterialConstants {
+    /// Constructor
+    #[inline]
+    pub fn new(color_factor: Vec4, roughness_factor: Vec4) -> Self {
+        Self {
+            color_factor,
+            roughness_factor,
+            // TODO: Clean up
+            extra: [
+                vec4(0.0, 0.0, 0.0, 0.0),
+                vec4(0.0, 0.0, 0.0, 0.0),
+                vec4(0.0, 0.0, 0.0, 0.0),
+                vec4(0.0, 0.0, 0.0, 0.0),
+                vec4(0.0, 0.0, 0.0, 0.0),
+                vec4(0.0, 0.0, 0.0, 0.0),
+                vec4(0.0, 0.0, 0.0, 0.0),
+                vec4(0.0, 0.0, 0.0, 0.0),
+                vec4(0.0, 0.0, 0.0, 0.0),
+                vec4(0.0, 0.0, 0.0, 0.0),
+                vec4(0.0, 0.0, 0.0, 0.0),
+                vec4(0.0, 0.0, 0.0, 0.0),
+                vec4(0.0, 0.0, 0.0, 0.0),
+                vec4(0.0, 0.0, 0.0, 0.0),
+            ],
+        }
+    }
 }
 
 impl Default for MaterialConstants {
     #[inline]
     fn default() -> Self {
         Self {
-            color_factors: vec4(1.0, 1.0, 1.0, 1.0),
-            metal_rough_factors: vec4(1.0, 1.0, 1.0, 1.0),
+            color_factor: vec4(1.0, 1.0, 1.0, 1.0),
+            roughness_factor: vec4(1.0, 1.0, 1.0, 1.0),
             extra: [vec4(1.0, 1.0, 1.0, 1.0); 14],
         }
     }
 }
 
+/// Resources are shared and cleaned up by [`Scene`](crate::engine::gltf::Scene) destructor.
 #[derive(Default, Debug, Clone, Copy)]
 pub struct MaterialResources {
     pub color_image: AllocatedImage,
     pub color_sampler: vk::Sampler,
     pub metal_rough_image: AllocatedImage,
     pub metal_rough_sampler: vk::Sampler,
-    pub data_alloc: Allocation,
-    pub data_buffer_offset: vk::DeviceSize,
+    pub alloc: Allocation,
+    pub buffer_offset: vk::DeviceSize,
 }
 
 impl MaterialResources {
@@ -251,22 +279,17 @@ impl MaterialResources {
         color_sampler: vk::Sampler,
         metal_rough_image: AllocatedImage,
         metal_rough_sampler: vk::Sampler,
-        data_alloc: Allocation,
-        data_buffer_offset: vk::DeviceSize,
+        alloc: Allocation,
+        buffer_offset: vk::DeviceSize,
     ) -> Self {
         Self {
             color_image,
             color_sampler,
             metal_rough_image,
             metal_rough_sampler,
-            data_alloc,
-            data_buffer_offset,
+            alloc,
+            buffer_offset,
         }
-    }
-
-    /// Cleanup the resources
-    pub fn cleanup(&mut self, device: &Device) {
-        ALLOCATOR.deallocate(device, &self.data_alloc);
     }
 }
 

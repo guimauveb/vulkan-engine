@@ -4,13 +4,13 @@ mod commands;
 mod descriptors;
 mod device;
 mod frame;
+mod gltf;
 mod gui;
 mod image;
 mod material;
 mod memory;
 mod meshes;
 mod pipelines;
-mod scene;
 mod swapchain;
 
 use anyhow::{anyhow, Result};
@@ -21,23 +21,21 @@ use commands::ImmediateSubmit;
 use descriptors::{DescriptorAllocator, DescriptorWriter};
 use device::QueueFamilyIndices;
 use frame::Frame;
+use gltf::Scene as GltfScene;
 use gui::{EguiTheme, Integration as EguiIntegration};
-use image::{copy_image_to_image, transition_image, write_pixels_to_image};
+use image::{copy_image_to_image, transition_image, write_pixels_to_image, RgbToRgbaPushConstants};
 use log::{debug, error};
-use material::{
-    GLTFMaterial, GLTFMetallicRoughness, MaterialConstants, MaterialPass, MaterialResources,
-};
-use memory::{AllocatedImage, AllocatedImageInfo, Allocator};
-use meshes::{DrawPushConstants, MeshNode};
+use material::{Material, MaterialConstants, MaterialPass, MaterialResources, MetallicRoughness};
+use memory::{AllocatedImage, AllocatedImageInfo, Allocation, Allocator};
+use meshes::{DrawContext, DrawPushConstants, Renderable, Scene};
 use pipelines::Pipeline;
-use scene::{DrawContext, Renderable, Scene};
 use std::{
     cmp::min,
     collections::HashMap,
     mem::transmute,
+    path::Path,
     ptr::{addr_of, copy_nonoverlapping as memcpy, from_ref},
-    rc::Rc,
-    slice,
+    slice::from_raw_parts,
 };
 use swapchain::Swapchain;
 use vulkanalia::{
@@ -56,7 +54,7 @@ use winit::{
 };
 
 /// Whether validation layers should be enabled.
-pub const ENABLE_VALIDATION_LAYER: bool = true; //cfg!(debug_assertions);
+pub const ENABLE_VALIDATION_LAYER: bool = cfg!(debug_assertions);
 
 /// Names of the validation layer.
 pub const VALIDATION_LAYER: vk::ExtensionName =
@@ -128,6 +126,7 @@ impl VulkanInterface {
     }
 }
 
+/// `vulkan` based 3D engine
 pub struct Engine {
     interface: VulkanInterface,
     event_loop: Option<EventLoop<()>>,
@@ -135,7 +134,7 @@ pub struct Engine {
     surface: vk::SurfaceKHR,
     indices: QueueFamilyIndices,
     graphics_queue: vk::Queue,
-    present_queue: vk::Queue,
+    _present_queue: vk::Queue,
     swapchain: Swapchain,
     frames: Vec<Frame>,
     current_frame: usize,
@@ -147,19 +146,22 @@ pub struct Engine {
     default_sampler_nearest: vk::Sampler,
     default_sampler_linear: vk::Sampler,
     draw_extent: vk::Extent2D,
-    descriptor_allocator: DescriptorAllocator,
+    descriptor_pool: DescriptorAllocator,
     descriptor_writer: DescriptorWriter,
     draw_image_descriptors: vk::DescriptorSet,
     draw_image_descriptor_layout: vk::DescriptorSetLayout,
+    rgb_to_rgba_descriptors: vk::DescriptorSet,
+    rgb_to_rgba_descriptor_layout: vk::DescriptorSetLayout,
     gradient_pipeline: Pipeline,
+    rgb_to_rgba_pipeline: Pipeline,
     mesh_pipeline: Pipeline,
     immediate_submit: ImmediateSubmit,
+    default_material: Material,
+    metal_rough_material: MetallicRoughness,
+    main_draw_context: DrawContext,
     scene: Scene,
     scene_descriptor_layout: vk::DescriptorSetLayout,
-    default_material: GLTFMaterial,
-    metal_rough_material: GLTFMetallicRoughness,
-    main_draw_context: DrawContext,
-    loaded_nodes: HashMap<String, Rc<MeshNode>>,
+    scenes: HashMap<String, GltfScene>,
     gui: Option<EguiIntegration>,
     gui_theme: Option<EguiTheme>,
     camera: Option<Camera>,
@@ -174,9 +176,9 @@ impl Engine {
         builder.set_commands()?;
         builder.set_sync_structures()?;
         builder.set_descriptors()?;
-        builder.set_compute_pipeline()?;
+        builder.set_compute_pipelines()?;
         builder.set_mesh_pipeline()?;
-        builder.set_metal_rough_material_pipeline()?;
+        builder.set_metal_roughness_material_pipeline()?;
         builder.set_samplers()?;
         builder.set_gui()?;
         builder.set_camera();
@@ -233,13 +235,18 @@ impl Engine {
                                     logical_key: key, ..
                                 } => {
                                     if let Some(camera) = self.camera.as_mut() {
-                                        camera.process_key_pressed(key);
+                                        camera.handle_key_pressed(key);
                                     }
                                 }
                             },
                             WindowEvent::CursorMoved { position, .. } => {
                                 if let Some(camera) = self.camera.as_mut() {
-                                    camera.process_mouse_motion(position.cast());
+                                    camera.handle_cursor_motion(position.cast());
+                                }
+                            }
+                            WindowEvent::MouseWheel { delta, .. } => {
+                                if let Some(camera) = self.camera.as_mut() {
+                                    camera.handle_scroll(delta);
                                 }
                             }
                             WindowEvent::Resized(size) => {
@@ -276,8 +283,8 @@ impl Engine {
 
         self.update_scene()?;
 
-        // Wait until the GPU has finished rendering the last frame.
         {
+            // Wait until the GPU has finished rendering the last frame.
             let current_frame = &mut self.frames[self.current_frame];
             unsafe {
                 self.interface.device.wait_for_fences(
@@ -449,7 +456,7 @@ impl Engine {
         // before the image is dipslayed to the user.
         let swapchains = &[self.swapchain.vk_swapchain];
         let wait_semaphores = &[current_frame.render_semaphore];
-        let image_indices: &[u32] = &[image_index.try_into()?];
+        let image_indices = &[image_index as u32];
         let present_info = vk::PresentInfoKHR::builder()
             .swapchains(swapchains)
             .wait_semaphores(wait_semaphores)
@@ -531,9 +538,8 @@ impl Engine {
                 .device
                 .cmd_set_scissor(cmd_buffer, 0, &[scissor]);
         }
-
-        let size = size_of::<Scene>().try_into()?;
         // Allocate a new uniform buffer for the scene data
+        let size = size_of::<Scene>() as vk::DeviceSize;
         let scene_info = vk::BufferCreateInfo::builder()
             .size(size)
             .usage(vk::BufferUsageFlags::UNIFORM_BUFFER)
@@ -552,9 +558,9 @@ impl Engine {
             "Buffer too small for scene data: {size} > {}",
             scene_alloc.size
         );
-        let scene_memory = scene_alloc.get_mapped_memory(&self.interface.device)?;
+        let scene_memory = scene_alloc.mapped_memory::<Scene>(&self.interface.device)?;
         unsafe {
-            memcpy(from_ref(&self.scene), scene_memory.cast(), 1);
+            memcpy(from_ref(&self.scene), scene_memory, 1);
         }
         scene_alloc.unmap_memory(&self.interface.device);
 
@@ -565,7 +571,7 @@ impl Engine {
         self.descriptor_writer.write_buffer(
             0,
             scene_alloc.buffer,
-            size_of::<Scene>().try_into()?,
+            size,
             0,
             vk::DescriptorType::UNIFORM_BUFFER,
         );
@@ -620,7 +626,7 @@ impl Engine {
                     object.material.pipeline.layout,
                     vk::ShaderStageFlags::VERTEX,
                     0,
-                    slice::from_raw_parts(
+                    from_raw_parts(
                         addr_of!(push_constants).cast::<u8>(),
                         size_of::<DrawPushConstants>(),
                     ),
@@ -666,6 +672,73 @@ impl Engine {
         }
     }
 
+    // FIXME: Does not really work, no validation errors but output colors are messed up.
+    /// Convert an `RGB` image to `RGBA` via a compute shader
+    fn _rgb_to_rgba(
+        &self,
+        cmd_buffer: vk::CommandBuffer,
+        input_image_alloc: Allocation,
+        output_image: AllocatedImage,
+        width: u32,
+        height: u32,
+    ) -> Result<()> {
+        transition_image(
+            &self.interface.device,
+            cmd_buffer,
+            output_image.image,
+            vk::ImageLayout::UNDEFINED,
+            vk::ImageLayout::GENERAL,
+        );
+
+        unsafe {
+            // Bind the rgb->rgba compute pipeline
+            self.interface.device.cmd_bind_pipeline(
+                cmd_buffer,
+                vk::PipelineBindPoint::COMPUTE,
+                self.rgb_to_rgba_pipeline.pipeline,
+            );
+            // Bind the descriptor set containing the image for the compute pipeline
+            self.interface.device.cmd_bind_descriptor_sets(
+                cmd_buffer,
+                vk::PipelineBindPoint::COMPUTE,
+                self.rgb_to_rgba_pipeline.layout,
+                0,
+                &[self.rgb_to_rgba_descriptors],
+                &[],
+            );
+            let push_constants =
+                RgbToRgbaPushConstants::new(width, height, input_image_alloc.device_address()?);
+            self.interface.device.cmd_push_constants(
+                cmd_buffer,
+                self.rgb_to_rgba_pipeline.layout,
+                vk::ShaderStageFlags::COMPUTE,
+                0,
+                from_raw_parts(
+                    addr_of!(push_constants).cast::<u8>(),
+                    size_of::<RgbToRgbaPushConstants>(),
+                ),
+            );
+            // Execute the compute pipeline dispatch.
+            self.interface.device.cmd_dispatch(
+                cmd_buffer,
+                // TODO: Check what workgroup size to chose
+                (width as f32 / 16.0).ceil() as u32,
+                (height as f32 / 16.0).ceil() as u32,
+                1,
+            );
+        }
+
+        transition_image(
+            &self.interface.device,
+            cmd_buffer,
+            output_image.image,
+            vk::ImageLayout::GENERAL,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        );
+
+        Ok(())
+    }
+
     /// Update scene data
     fn update_scene(&mut self) -> Result<()> {
         if let Some(camera) = self.camera.as_mut() {
@@ -673,25 +746,10 @@ impl Engine {
         }
 
         self.main_draw_context.opaque_surfaces.clear();
-        // Update cube
-        for x in -3..3 {
-            let scale_matrix = Mat4::from_scale(0.2);
-            let translation = Mat4::from_translation(vec3(x as f32, 1.0, 0.0));
-            self.loaded_nodes
-                .get("Cube")
-                .ok_or(anyhow!("`Cube` mesh not found"))?
-                .draw(translation * scale_matrix, &mut self.main_draw_context)?;
-        }
-        // Update monkey head
-        self.loaded_nodes
-            .get("Suzanne")
-            .ok_or(anyhow!("`Suzanne` mesh not found"))?
-            .draw(Mat4::identity(), &mut self.main_draw_context)?;
-
         // Update global scene
         self.scene.view = self.camera.map_or_else(
             || Mat4::from_translation(vec3(0.0, 0.0, -5.0)),
-            |camera| camera.get_view_matrix(),
+            |camera| camera.view_matrix(),
         );
         // Camera projection
         self.scene.projection = CORRECTION_MATRIX
@@ -706,6 +764,12 @@ impl Engine {
         self.scene.sunlight_color = vec4(1.0, 1.0, 1.0, 1.0);
         self.scene.sunlight_direction = vec4(0.0, 1.0, 0.5, 1.0);
 
+        // Render scene
+        self.scenes
+            .get("structure")
+            .ok_or(anyhow!("`structure` scene not found"))?
+            .draw(Mat4::identity(), &mut self.main_draw_context)?;
+
         Ok(())
     }
 
@@ -713,7 +777,7 @@ impl Engine {
     pub fn load_default_data(&mut self) -> Result<()> {
         self.load_default_textures()?;
         self.load_default_material()?;
-        self.load_default_meshes()?;
+        self.load_gltf_scene(Path::new("./assets/structure.glb"))?;
 
         Ok(())
     }
@@ -745,6 +809,7 @@ impl Engine {
             &self.immediate_submit,
             from_ref(&white),
             &white_image,
+            4,
         )?;
         self.white_image = white_image;
 
@@ -783,6 +848,7 @@ impl Engine {
             &self.immediate_submit,
             pixels.as_ptr(),
             &image,
+            4,
         )?;
         self.checkerboard_image = image;
 
@@ -794,39 +860,40 @@ impl Engine {
         debug!("Loading default material");
         // Set the uniform buffer for the material data
         let material_info = vk::BufferCreateInfo::builder()
-            .size(size_of::<MaterialConstants>().try_into()?)
+            .size(size_of::<MaterialConstants>() as vk::DeviceSize)
             .usage(vk::BufferUsageFlags::UNIFORM_BUFFER)
             .build();
-        let material_constants = ALLOCATOR.allocate_buffer(
+        let material_alloc = ALLOCATOR.allocate_buffer(
             &self.interface,
             material_info,
-            vk::MemoryPropertyFlags::HOST_COHERENT | vk::MemoryPropertyFlags::HOST_VISIBLE,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         )?;
         // Write the buffer
         let scene_uniform_data = unsafe {
-            material_constants
-                .get_mapped_memory(&self.interface.device)?
-                .cast::<MaterialConstants>()
+            material_alloc
+                .mapped_memory::<MaterialConstants>(&self.interface.device)?
                 .as_mut()
                 .ok_or(anyhow!("`MaterialConstants` mapped memory pointer is null"))?
         };
-        scene_uniform_data.color_factors = vec4(1.0, 1.0, 1.0, 1.0);
-        scene_uniform_data.metal_rough_factors = vec4(1.0, 0.5, 0.0, 0.0);
+        scene_uniform_data.color_factor = vec4(1.0, 1.0, 1.0, 1.0);
+        scene_uniform_data.roughness_factor = vec4(1.0, 0.5, 0.0, 0.0);
 
         let material_resources = MaterialResources::new(
             self.white_image,
             self.default_sampler_linear,
             self.white_image,
             self.default_sampler_linear,
-            material_constants,
+            material_alloc,
             0,
         );
         self.default_material = self.metal_rough_material.write_material(
             &self.interface.device,
             MaterialPass::MainColor,
             material_resources,
-            &mut self.descriptor_allocator,
+            &mut self.descriptor_pool,
         )?;
+
+        ALLOCATOR.deallocate(&self.interface.device, &material_alloc);
 
         Ok(())
     }
@@ -844,14 +911,14 @@ impl Engine {
     /// Shut down the engine
     pub fn stop(&mut self) -> Result<()> {
         debug!("Shutting down engine");
-        self.cleanup()?;
+        self.destroy()?;
         debug!("Engine stopped");
 
         Ok(())
     }
 
-    /// Cleanup the resources
-    fn cleanup(&mut self) -> Result<()> {
+    /// destroy the resources
+    fn destroy(&mut self) -> Result<()> {
         debug!("Cleaning up engine resources");
         unsafe {
             self.interface.device.device_wait_idle()?;
@@ -861,32 +928,35 @@ impl Engine {
         if let Some(mut gui) = self.gui.take() {
             gui.destroy(&self.interface);
         }
-        // Cleanup frames
+        // destroy frames
         for mut frame in self.frames.drain(..) {
-            frame.cleanup(&self.interface.device);
+            frame.destroy(&self.interface.device);
         }
         // Destroy material
-        self.metal_rough_material.cleanup(&self.interface.device);
-        // Cleanup meshes
-        for (_, node) in self.loaded_nodes.drain() {
-            node.mesh.cleanup(&self.interface.device);
+        self.metal_rough_material.destroy(&self.interface.device);
+        // destroy scenes
+        for (_, mut scene) in self.scenes.drain() {
+            scene.destroy(&self.interface.device);
         }
         // Destroy pipelines
-        self.gradient_pipeline.cleanup(&self.interface.device);
-        self.mesh_pipeline.cleanup(&self.interface.device);
+        self.gradient_pipeline.destroy(&self.interface.device);
+        self.mesh_pipeline.destroy(&self.interface.device);
+        self.rgb_to_rgba_pipeline.destroy(&self.interface.device);
         // Destroy descriptor resources
         unsafe {
-            self.descriptor_allocator
-                .destroy_pools(&self.interface.device);
+            self.descriptor_pool.destroy_pools(&self.interface.device);
             self.interface
                 .device
                 .destroy_descriptor_set_layout(self.draw_image_descriptor_layout, None);
             self.interface
                 .device
                 .destroy_descriptor_set_layout(self.scene_descriptor_layout, None);
+            self.interface
+                .device
+                .destroy_descriptor_set_layout(self.rgb_to_rgba_descriptor_layout, None);
         }
         // Destroy immediate submit resources
-        self.immediate_submit.cleanup(&self.interface.device);
+        self.immediate_submit.destroy(&self.interface.device);
         // Destroy samplers
         unsafe {
             self.interface
@@ -902,7 +972,7 @@ impl Engine {
         ALLOCATOR.deallocate_image(&self.interface.device, self.white_image);
         ALLOCATOR.deallocate_image(&self.interface.device, self.checkerboard_image);
         // Destroy swapchain
-        self.swapchain.cleanup(&self.interface.device);
+        self.swapchain.destroy(&self.interface.device);
 
         unsafe {
             self.interface
@@ -920,7 +990,7 @@ impl Engine {
         unsafe {
             self.interface.device.device_wait_idle()?;
         }
-        self.swapchain.cleanup(&self.interface.device);
+        self.swapchain.destroy(&self.interface.device);
         self.recreate_swapchain()?;
         if let Some(gui) = self.gui.as_mut() {
             gui.resize(self.swapchain.extent);

@@ -14,8 +14,8 @@ pub struct Frame {
 }
 
 impl Frame {
-    /// Cleanup the resources
-    pub fn cleanup(&mut self, device: &Device) {
+    /// Destroy resources
+    pub fn destroy(&mut self, device: &Device) {
         unsafe {
             device.destroy_command_pool(self.command_pool, None);
             device.destroy_fence(self.render_fence, None);

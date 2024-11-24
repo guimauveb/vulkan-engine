@@ -15,7 +15,7 @@ layout(buffer_reference, std430) readonly buffer VertexBuffer {
     Vertex vertices[];
 };
 
-// push constants block
+// Push constants block
 layout(push_constant) uniform constants
 {
     vec2 screen_size;

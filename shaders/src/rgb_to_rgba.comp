@@ -1,0 +1,43 @@
+#version 450
+#extension GL_EXT_buffer_reference : require
+
+// Size of a workgroup
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(buffer_reference, std430) readonly buffer inRgb
+{
+    uint input_image[];
+};
+
+// Destination image
+layout(rgba16f, set = 0, binding = 0) uniform image2D outRgba;
+
+// Push constants block
+layout(push_constant) uniform constants
+{
+    uint image_width;
+    uint image_height;
+    inRgb in_rgb;
+} PushConstants;
+
+// FIXME: Does not really work, no validation errors but output colors are messed up.
+void main()
+{
+    // Use the invocation ids as column and row values
+    uint column = gl_GlobalInvocationID.x;
+    uint row = gl_GlobalInvocationID.y;
+
+    uint width = PushConstants.image_width;
+    uint height = PushConstants.image_height;
+
+    uint index = (column + row * width) * 3;
+
+    // Expand color to vec4 by setting the alpha to 1.0 and copy the vec3 texel from the source array to the output image
+    vec4 color = vec4(
+            PushConstants.in_rgb.input_image[index],
+            PushConstants.in_rgb.input_image[index + 1],
+            PushConstants.in_rgb.input_image[index + 2],
+            1.0
+        );
+    imageStore(outRgba, ivec2(column, row), color);
+}

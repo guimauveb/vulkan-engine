@@ -15,7 +15,8 @@ fn main() {
 
     let watch_files = [
         "./shaders/compile.sh",
-        "./shaders/compute.comp",
+        "./shaders/gradient.comp",
+        "./shaders/rgb_to_rgba.comp",
         "./shaders/colored_triangle.vert",
         "./shaders/colored_triangle.frag",
         "./shaders/colored_triangle_mesh.frag",

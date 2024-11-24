@@ -20,8 +20,8 @@ impl Pipeline {
         Self { pipeline, layout }
     }
 
-    /// Cleanup resources
-    pub fn cleanup(&self, device: &Device) {
+    /// Destroy resources
+    pub fn destroy(&self, device: &Device) {
         unsafe {
             device.destroy_pipeline(self.pipeline, None);
             device.destroy_pipeline_layout(self.layout, None);
@@ -88,7 +88,7 @@ impl<'d> GraphicsPipelineBuilder<'d> {
             .build();
 
         let pipeline_info = vk::GraphicsPipelineCreateInfo::builder()
-            .stage_count(self.shader_stages.len().try_into()?)
+            .stage_count(self.shader_stages.len() as u32)
             .stages(&self.shader_stages)
             .vertex_input_state(&vertex_input)
             .input_assembly_state(&self.input_assembly)
@@ -160,10 +160,10 @@ impl<'d> GraphicsPipelineBuilder<'d> {
         self.multisampling.alpha_to_one_enable = vk::FALSE;
     }
 
-    #[allow(dead_code)]
     /// Enable additive blending
     ///
     /// `outColor = srcColor.rgb * srcColor.a + dstColor.rgb * 1.0`
+    #[allow(dead_code)]
     pub fn enable_blending_additive(&mut self) {
         self.color_blend_attachment.color_write_mask = vk::ColorComponentFlags::R
             | vk::ColorComponentFlags::G
@@ -178,10 +178,10 @@ impl<'d> GraphicsPipelineBuilder<'d> {
         self.color_blend_attachment.alpha_blend_op = vk::BlendOp::ADD;
     }
 
-    #[allow(dead_code)]
     /// Enable alphablend blending
     ///
     /// `outColor = srcColor.rgb * srcColor.a + dstColor.rgb * (1.0 - srcColor.a)`
+    #[allow(dead_code)]
     pub fn enable_blending_alphablend(&mut self) {
         self.color_blend_attachment.color_write_mask = vk::ColorComponentFlags::R
             | vk::ColorComponentFlags::G
@@ -298,11 +298,8 @@ impl<'d> ComputePipelineBuilder<'d> {
     }
 
     /// Set descriptor layouts
-    pub fn set_descriptor_layouts(&mut self, layouts: &[vk::DescriptorSetLayout]) -> Result<()> {
-        let layout_info = vk::PipelineLayoutCreateInfo::builder()
-            .set_layouts(layouts)
-            .build();
-        self.layout = unsafe { self.device.create_pipeline_layout(&layout_info, None)? };
+    pub fn set_layout(&mut self, layout_info: &vk::PipelineLayoutCreateInfo) -> Result<()> {
+        self.layout = unsafe { self.device.create_pipeline_layout(layout_info, None)? };
 
         Ok(())
     }

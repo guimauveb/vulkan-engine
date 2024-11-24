@@ -2,7 +2,8 @@
 // TODO: - Take framerate into account to adjust velocity
 use super::{Mat4, Point3, Vec3};
 use cgmath::{vec3, Angle, Deg, InnerSpace};
-use winit::{dpi::PhysicalPosition, keyboard::Key};
+use log::warn;
+use winit::{dpi::PhysicalPosition, event::MouseScrollDelta, keyboard::Key};
 
 /// Camera speed
 const SPEED: f32 = 0.2;
@@ -37,7 +38,7 @@ impl Camera {
 
     /// Get current camera view matrix
     #[inline]
-    pub fn get_view_matrix(&self) -> Mat4 {
+    pub fn view_matrix(&self) -> Mat4 {
         Mat4::look_at_rh(self.eye, self.eye + self.target, self.up)
     }
 
@@ -53,8 +54,8 @@ impl Camera {
         self.target = direction.normalize();
     }
 
-    /// Process keyboard key pressed
-    pub fn process_key_pressed(&mut self, key: Key) {
+    /// Handle keyboard key pressed
+    pub fn handle_key_pressed(&mut self, key: Key) {
         if let Key::Character(key) = &key {
             match key.as_str() {
                 "c" => {
@@ -74,40 +75,31 @@ impl Camera {
         if let Key::Character(key) = key {
             match key.as_str() {
                 "w" => {
-                    self.eye += self.target * SPEED;
-                    self.update();
+                    self.move_forward();
                 }
                 "s" => {
-                    self.eye -= self.target * SPEED;
-                    self.update();
+                    self.move_backward();
                 }
                 "a" => {
-                    let mut left = self.up.cross(self.target).normalize();
-                    left *= SPEED;
-                    self.eye += left;
-                    self.update();
+                    self.move_left();
                 }
                 "d" => {
-                    let mut right = self.target.cross(self.up).normalize();
-                    right *= SPEED;
-                    self.eye += right;
-                    self.update();
+                    self.move_right();
                 }
                 "q" => {
-                    self.eye += self.up * SPEED;
-                    self.update();
+                    self.move_up();
                 }
                 "e" => {
-                    self.eye -= self.up * SPEED;
-                    self.update();
+                    self.move_down();
                 }
                 _ => {}
             }
         }
+        self.update();
     }
 
-    /// Process mouse movement
-    pub fn process_mouse_motion(&mut self, position: PhysicalPosition<f32>) {
+    /// Process mouse cursor movement
+    pub fn handle_cursor_motion(&mut self, position: PhysicalPosition<f32>) {
         if !self.enabled {
             return;
         }
@@ -122,5 +114,65 @@ impl Camera {
         self.yaw += delta_x * SPEED;
         self.pitch += delta_y * SPEED;
         self.pitch = self.pitch.clamp(-90.0, 90.0);
+    }
+
+    /// Process mouse wheel scroll
+    pub fn handle_scroll(&mut self, delta: MouseScrollDelta) {
+        if !self.enabled {
+            return;
+        }
+
+        match delta {
+            MouseScrollDelta::LineDelta(horizontal, vertical) => {
+                if vertical > 0.0 {
+                    self.move_forward();
+                } else if vertical < 0.0 {
+                    self.move_backward();
+                }
+                if horizontal > 0.0 {
+                    self.move_left();
+                } else if horizontal < 0.0 {
+                    self.move_right();
+                }
+            }
+            MouseScrollDelta::PixelDelta(_) => {
+                warn!("Mouse scroll in pixels unhandled");
+            }
+        }
+        self.update();
+    }
+
+    #[inline]
+    fn move_forward(&mut self) {
+        self.eye += self.target * SPEED;
+    }
+
+    #[inline]
+    fn move_backward(&mut self) {
+        self.eye -= self.target * SPEED;
+    }
+
+    #[inline]
+    fn move_left(&mut self) {
+        let mut left = self.up.cross(self.target).normalize();
+        left *= SPEED;
+        self.eye += left;
+    }
+
+    #[inline]
+    fn move_right(&mut self) {
+        let mut right = self.target.cross(self.up).normalize();
+        right *= SPEED;
+        self.eye += right;
+    }
+
+    #[inline]
+    fn move_up(&mut self) {
+        self.eye += self.up * SPEED;
+    }
+
+    #[inline]
+    fn move_down(&mut self) {
+        self.eye -= self.up * SPEED;
     }
 }
