@@ -12,7 +12,6 @@ egui-winit        = { version = "0.25", default-features = false, features = ["w
 gltf              = "1.4"
 hashbrown         = "0.14"
 log               = "0.4"
-minstant          = "0.1"
 png               = "0.17"
 pretty_env_logger = "0.4"
 raw-window-handle = "0.5"
